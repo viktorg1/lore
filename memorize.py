@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Map a project and register it in ~/lore/<name>.
+"""Map a project and register it in ~/.lore/<name>.
 
     memorize.py --path ~/projects/myapp [--name <name>]
 """

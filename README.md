@@ -12,7 +12,7 @@ It does not train model weights. It is retrieval memory: inspectable, editable, 
 ## How it works
 
 ```
-memorize.py   maps the project (sections, languages)             -> ~/lore/<name>/map.json
+memorize.py   maps the project (sections, languages)             -> ~/.lore/<name>/map.json
 train.py      turns your instruction docs into scoped rules      -> rules.json
 discover.py   infers rules from the code and tooling config      -> rules.json (pending)
 mcp_server.py gives the agent two tools:
@@ -27,7 +27,7 @@ A rule has a **scope**: `global`, `section:<name>` (a folder-level area such as 
 Rules from `train.py` are active immediately; rules from `discover.py` and from the agent's `record_feedback` start as
 **pending** and have no effect until you approve them.
 
-Memory lives in `~/lore/<name>/` (override the base folder with `LORE_HOME`):
+Memory lives in `~/.lore/<name>/` (override the base folder with `LORE_HOME`):
 
 ```
 project.json   name + project root
@@ -251,7 +251,7 @@ there too. Per the GitHub docs these locations are current, but the CLI changes 
 the "custom instructions" and "add MCP servers" pages of the Copilot CLI documentation.
 
 Tool permission prompts: the CLI may ask before running an MCP tool. `get_rules` only reads; `record_feedback` only
-writes a pending rule to `~/lore/<name>/rules.json`.
+writes a pending rule to `~/.lore/<name>/rules.json`.
 
 ### 3c. No MCP? Static fallback
 

@@ -1,4 +1,4 @@
-"""On-disk layout: ~/lore/<project>/{project.json,map.json,rules.json}."""
+"""On-disk layout: ~/.lore/<project>/{project.json,map.json,rules.json}."""
 from __future__ import annotations
 
 import json
@@ -12,8 +12,8 @@ NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
 def home() -> Path:
-    """Base folder for all projects: $LORE_HOME, else ~/lore."""
-    return Path(os.environ.get("LORE_HOME") or Path.home() / "lore")
+    """Base folder for all projects: $LORE_HOME, else ~/.lore."""
+    return Path(os.environ.get("LORE_HOME") or Path.home() / ".lore")
 
 
 def validate_name(name: str) -> str:

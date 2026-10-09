@@ -254,7 +254,7 @@ class TestStoreHome(unittest.TestCase):
             saved = {k: os.environ.pop(k, None) for k in ("LORE_HOME", "HOME")}
             self.addCleanup(lambda: [os.environ.__setitem__(k, v) if v is not None else os.environ.pop(k, None) for k, v in saved.items()])
             os.environ["HOME"] = h
-            self.assertEqual(store.home(), Path(h) / "lore")
+            self.assertEqual(store.home(), Path(h) / ".lore")
             os.environ["LORE_HOME"] = "/x/elsewhere"
             self.assertEqual(store.home(), Path("/x/elsewhere"))
 
