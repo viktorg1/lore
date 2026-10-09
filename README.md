@@ -287,6 +287,7 @@ rule), or add it directly with `review.py add`. Approve weekly; reject vague one
 python3 serve.py             # prints http://127.0.0.1:8765/?t=<token> and opens it
 python3 serve.py --port 9000 --no-open
 ```
+<img width="1920" height="999" alt="image" src="https://github.com/user-attachments/assets/6ad8b77a-cb79-4998-af07-07036a223f93" />
 
 A dark, single-page UI. Projects are listed on the left (a badge shows how many rules wait for review), with
 **+ Add project** at the bottom. Picking a project shows three tabs:
