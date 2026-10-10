@@ -110,7 +110,7 @@ Reads the project and proposes rules from four kinds of evidence, each shown wit
   (`*.csproj`), Ruby (`Gemfile`), Dart (`pubspec.yaml`), Elixir (`mix.exs`), Scala (`build.sbt`), C/C++
   (`CMakeLists.txt`), `Makefile`/`justfile`, 20 linter/formatter configs (ESLint, Prettier, Biome, ruff,
   golangci-lint, rustfmt, RuboCop, phpcs, PHPStan, ...) and `.editorconfig`. About 90 well-known frameworks and tools
-  are recognised (`DEPS` in `ecosystems.py`); runtime targets (PHP/Node/Python/Go/Rust/Java/.NET/Ruby
+  are recognised (`DEPS` in `discovery/ecosystems.py`); runtime targets (PHP/Node/Python/Go/Rust/Java/.NET/Ruby
   versions) become "target X" rules.
 - **Code statistics** — indentation, quote style, semicolons, line length, file-name casing per folder.
 - **Language markers** — 120 framework-independent conventions across 19 languages (PHP, JS, TS, Vue, Svelte, Python,
@@ -309,7 +309,7 @@ A dark, single-page UI. Projects are listed on the left (a badge shows how many 
 
 It reads and writes the same files as the CLI, so both stay in sync. The page is read from disk on every request and
 sent with `Cache-Control: no-store`, so a reload always shows the current version; no restart is needed after
-editing `ui/index.html`. (Changes to `serve.py` itself still need a restart.)
+editing `web/index.html`. (Changes to the Python code still need a restart.)
 
 It is meant to be run on your own machine, but note what it does. It can run lore's scripts on folders you name, so it
 listens on `127.0.0.1` only, every request needs the random token printed at startup (a new one each run), and requests
@@ -345,14 +345,32 @@ never as HTML. Stop it with Ctrl+C.
 ## Layout of this repo
 
 ```
-memorize.py  train.py  discover.py  review.py  mcp_server.py  serve.py   entry points (run directly with python3)
-store.py  mapper.py  rules.py  trainer.py  ecosystems.py      storage, project map, rules, training, manifest readers
-discovery/                Discoverer, detectors, markers, scanner, registry
-discovery/languages/      one module per language (LANGUAGE + vanilla markers)
-discovery/frameworks/     one module per language family (FRAMEWORKS)
-ui/index.html             the single-page UI served by serve.py
-tests/                    python3 -m unittest discover -s tests
+memorize.py  train.py  discover.py  review.py  serve.py  mcp_server.py
+                         entry points: thin wrappers you run with python3 (their paths are stable, so
+                         MCP configs and docs can point at them)
+
+core/                    the domain; knows nothing about the command line, HTTP or MCP
+  store.py                 data folder (~/.lore), project-name rules, atomic JSON files
+  projects.py              Project and the registry of registered projects
+  models.py                Scope, Rule, Status: typed objects for what is stored as JSON
+  repository.py            RuleRepository: read/add/edit/approve/remove rules, with dedupe
+  resolver.py              which rules apply to which files, within a token budget
+  export.py                write rules as Copilot instruction files
+  trainer.py               turn instruction documents into rules
+  mapper.py, globs.py, textutil.py   project structure map, glob matching, text helpers
+discovery/               infer rules from code (depends on core only)
+  codebase.py  detectors.py  markers.py  ecosystems.py  scanner.py  registry.py  models.py
+  languages/               one module per language (LANGUAGE + vanilla markers)
+  frameworks/              one module per language family (FRAMEWORKS)
+cli/                     the command-line commands (one module per script) + shared plumbing
+web/                     serve.py's implementation: server.py (HTTP + security), api.py, runner.py, index.html
+mcpserver/               mcp_server.py's implementation: protocol.py (generic MCP) and tools.py (lore's two tools)
+tests/                   python3 -m unittest discover -s tests   (one file per area; test_architecture.py enforces the layering)
 ```
 
-There is no install step and no package: the scripts import their sibling modules, so run them from anywhere by path
-(`python3 ~/projects/lore/memorize.py ...`).
+The layers only depend downwards: `core` imports nothing of lore's own, `discovery` imports `core`, and the interfaces
+(`cli`, `web`, `mcpserver`) import `core` and `discovery`. To add a command, a tool or a web action, build it on `core`;
+to teach discovery a convention, add a marker (see above). A test fails if a lower layer imports a higher one.
+
+There is no install step and no package to install: the scripts find their sibling folders, so run them from anywhere by
+path (`python3 ~/projects/lore/memorize.py ...`).

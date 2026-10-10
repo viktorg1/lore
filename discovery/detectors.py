@@ -1,22 +1,24 @@
-"""Detectors: each inspects a Project and returns Candidates. Run in order by Discoverer."""
+"""Detectors: each inspects a Codebase and returns Candidates. Run in order by Discoverer."""
 from __future__ import annotations
 
 import re
 from abc import ABC, abstractmethod
 from collections import Counter
 
-import ecosystems
-import rules
-from . import registry, scanner
-from .core import Candidate, Project, pct
+from core.globs import split_globs
+from core.models import Scope
+
+from . import ecosystems, registry, scanner
+from .codebase import Codebase
 from .languages.base import Language
+from .models import Candidate, pct
 
 
 class Detector(ABC):
     name = "detector"
 
     @abstractmethod
-    def detect(self, project: Project) -> list[Candidate]: ...
+    def detect(self, codebase: Codebase) -> list[Candidate]: ...
 
 
 # ---------- tooling config ----------
@@ -24,11 +26,11 @@ class Detector(ABC):
 class EditorConfigDetector(Detector):
     name = "editorconfig"
 
-    def detect(self, project: Project) -> list[Candidate]:
-        fp = project.root / ".editorconfig"
+    def detect(self, codebase: Codebase) -> list[Candidate]:
+        fp = codebase.root / ".editorconfig"
         if not fp.exists():
             return []
-        project.has_editorconfig = True
+        codebase.has_editorconfig = True
         out: list[Candidate] = []
         glob, props = None, {}
 
@@ -49,7 +51,7 @@ class EditorConfigDetector(Detector):
             if props.get("max_line_length", "off") not in ("off", "unset"):
                 bits.append(f"max line length {props['max_line_length']}")
             if bits:
-                scope = {"type": "global"} if glob == "*" else {"type": "glob", "globs": rules.split_globs(glob)}
+                scope = Scope.everywhere() if glob == "*" else Scope.for_globs(*split_globs(glob))
                 label = "all files" if glob == "*" else glob
                 out.append(Candidate(f"Formatting for {label}: " + "; ".join(bits) + ".", scope, ".editorconfig", "config"))
 
@@ -70,8 +72,8 @@ class EditorConfigDetector(Detector):
 class ManifestDetector(Detector):
     name = "manifests"
 
-    def detect(self, project: Project) -> list[Candidate]:
-        return ecosystems.candidates(project.facts, project.root)
+    def detect(self, codebase: Codebase) -> list[Candidate]:
+        return ecosystems.candidates(codebase.facts, codebase.root)
 
 
 # ---------- code statistics ----------
@@ -80,15 +82,15 @@ class StyleDetector(Detector):
     """Indentation, quotes, semicolons and line length, per language."""
     name = "style"
 
-    def detect(self, project: Project) -> list[Candidate]:
+    def detect(self, codebase: Codebase) -> list[Candidate]:
         out: list[Candidate] = []
         for lang in registry.languages().values():
-            files = project.files_of(lang.name)
-            if len(files) < project.th.min_files:
+            files = codebase.files_of(lang.name)
+            if len(files) < codebase.th.min_files:
                 continue
-            out += self._indent(lang, files, project)
+            out += self._indent(lang, files, codebase)
             out += self._quotes(lang, files)
-            out += self._semicolons(lang, files, project)
+            out += self._semicolons(lang, files, codebase)
             out += self._line_length(lang, files)
         return out
 
@@ -115,15 +117,15 @@ class StyleDetector(Detector):
             return steps.most_common(1)[0][0]
         return None
 
-    def _indent(self, lang: Language, files, project) -> list[Candidate]:
-        if project.has_editorconfig or lang.formatter_enforced:
+    def _indent(self, lang: Language, files, codebase) -> list[Candidate]:
+        if codebase.has_editorconfig or lang.formatter_enforced:
             return []
         votes = Counter(v for t in files.values() if (v := self._indent_vote(t)))
         tot = sum(votes.values())
-        if not votes or tot < project.th.min_files:
+        if not votes or tot < codebase.th.min_files:
             return []
         style, c = votes.most_common(1)[0]
-        if c / tot < project.th.min_ratio:
+        if c / tot < codebase.th.min_ratio:
             return []
         what = "tabs" if style == 0 else f"{style} spaces"
         return [Candidate(f"Indent {lang.name} code with {what}.", lang.scope(), f"{pct(c, tot)} of {lang.name} files", "stats")]
@@ -142,7 +144,7 @@ class StyleDetector(Detector):
                 for name, c in (("single", single), ("double", double)) if c / tot >= 0.8]
 
     @staticmethod
-    def _semicolons(lang: Language, files, project) -> list[Candidate]:
+    def _semicolons(lang: Language, files, codebase) -> list[Candidate]:
         if not lang.check_semicolons:
             return []
         semi = total = 0
@@ -154,7 +156,7 @@ class StyleDetector(Detector):
                     semi += s.endswith(";")
         if total < 40:
             return []
-        r = project.th.min_ratio
+        r = codebase.th.min_ratio
         if semi / total >= r:
             return [Candidate(f"Terminate statements with semicolons in {lang.name} code.", lang.scope(), f"{pct(semi, total)} of statements", "stats")]
         if semi / total <= 1 - r:
@@ -193,10 +195,10 @@ class NamingDetector(Detector):
                 return k
         return None  # a single lowercase word fits several styles, so it casts no vote
 
-    def detect(self, project: Project) -> list[Candidate]:
+    def detect(self, codebase: Codebase) -> list[Candidate]:
         code_exts = registry.code_extensions()
         by_dir: dict[tuple[str, str], list[str]] = {}
-        for rel in project.files:
+        for rel in codebase.files:
             if scanner.is_vendored(rel):
                 continue
             d, _, base = rel.rpartition("/")
@@ -211,7 +213,7 @@ class NamingDetector(Detector):
             tot = sum(votes.values())
             if tot >= 4:
                 style, c = votes.most_common(1)[0]
-                if c / tot >= project.th.min_ratio:
+                if c / tot >= codebase.th.min_ratio:
                     groups.setdefault((ext, style), []).append((d, c, tot))
         ranked = sorted(groups.items(), key=lambda kv: -sum(t for _, _, t in kv[1]))[:self.MAX_RULES]
         out = []
@@ -219,7 +221,7 @@ class NamingDetector(Detector):
             dirs = sorted(dirs, key=lambda x: -x[2])[:8]
             out.append(Candidate(
                 f"Name .{ext} files in {style} ({', '.join(d for d, _, _ in dirs)}).",
-                {"type": "glob", "globs": [f"{d}/*.{ext}" for d, _, _ in dirs]},
+                Scope.for_globs(*[f"{d}/*.{ext}" for d, _, _ in dirs]),
                 "; ".join(f"{d}: {pct(c, t)}" for d, c, t in dirs[:3]), "stats"))
         return out
 
@@ -227,36 +229,36 @@ class NamingDetector(Detector):
 # ---------- pattern markers ----------
 
 class LanguageMarkerDetector(Detector):
-    """Framework-independent ("vanilla") markers of every language present in the project."""
+    """Framework-independent ("vanilla") markers of every language present in the codebase."""
     name = "language-markers"
 
     def __init__(self, extra=()):
         self.extra = list(extra)
 
-    def detect(self, project: Project) -> list[Candidate]:
+    def detect(self, codebase: Codebase) -> list[Candidate]:
         out = []
         for lang in registry.languages().values():
-            if not project.files_of(lang.name):
+            if not codebase.files_of(lang.name):
                 continue
             for marker in lang.markers:
-                out += marker.evaluate(project)
+                out += marker.evaluate(codebase)
         for marker in self.extra:
-            out += marker.evaluate(project)
+            out += marker.evaluate(codebase)
         return out
 
 
 class FrameworkMarkerDetector(Detector):
-    """Markers of each framework the project demonstrably uses."""
+    """Markers of each framework the codebase demonstrably uses."""
     name = "framework-markers"
 
-    def detect(self, project: Project) -> list[Candidate]:
+    def detect(self, codebase: Codebase) -> list[Candidate]:
         out = []
         for fw in registry.frameworks():
-            evidence = fw.detect(project)
+            evidence = fw.detect(codebase)
             if not evidence:
                 continue
             for marker in fw.markers:
-                for c in marker.evaluate(project):
+                for c in marker.evaluate(codebase):
                     c.kind = "framework"
                     c.evidence += f" ({fw.name}: {evidence})"
                     out.append(c)

@@ -17,24 +17,25 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .core import Candidate, Project, Thresholds
+from .codebase import Codebase
+from .models import Candidate, Thresholds
 from .detectors import (Detector, EditorConfigDetector, FrameworkMarkerDetector, LanguageMarkerDetector,
                         ManifestDetector, NamingDetector, StyleDetector)
 from .markers import (AbsentMarker, ChoiceMarker, FileMarker, Marker, OccurrenceMarker, Option,
                       marker_from_dict)
 
-__all__ = ["Discoverer", "discover", "Candidate", "Project", "Thresholds", "Marker", "FileMarker",
+__all__ = ["Discoverer", "discover", "Candidate", "Codebase", "Thresholds", "Marker", "FileMarker",
            "OccurrenceMarker", "AbsentMarker", "ChoiceMarker", "Option", "marker_from_dict"]
 
 
 class Discoverer:
-    """Runs detectors over a project, in order, and concatenates their candidates."""
+    """Runs detectors over a codebase, in order, and concatenates their candidates."""
 
     def __init__(self, thresholds: Thresholds | None = None, extra_markers: list[Marker] | None = None,
                  detectors: list[Detector] | None = None):
         self.thresholds = thresholds or Thresholds()
         self.detectors = detectors or [
-            EditorConfigDetector(),          # must precede StyleDetector (it sets project.has_editorconfig)
+            EditorConfigDetector(),          # must precede StyleDetector (it sets codebase.has_editorconfig)
             ManifestDetector(),
             StyleDetector(),
             NamingDetector(),
@@ -43,8 +44,8 @@ class Discoverer:
         ]
 
     def run(self, root: Path) -> list[Candidate]:
-        project = Project(root, self.thresholds)
-        return [c for d in self.detectors for c in d.detect(project)]
+        codebase = Codebase(root, self.thresholds)
+        return [c for d in self.detectors for c in d.detect(codebase)]
 
 
 def discover(root: Path, min_ratio: float = 0.9, min_files: int = 5,

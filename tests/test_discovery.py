@@ -1,15 +1,15 @@
 import json
 import re
-import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import support  # noqa: F401  (puts the repository root on sys.path)
 
-import mapper  # noqa: E402
-from discovery import (AbsentMarker, ChoiceMarker, Discoverer, FileMarker,  # noqa: E402
-                                    OccurrenceMarker, Thresholds, discover, marker_from_dict, registry)
+from core import mapper
+from core.models import Scope
+from discovery import (AbsentMarker, ChoiceMarker, Discoverer, FileMarker, OccurrenceMarker, Thresholds,
+                       discover, ecosystems, marker_from_dict, registry)
 
 
 def all_markers():
@@ -237,7 +237,7 @@ class TestExtensibility(Fixture):
 
         class Fixed(Detector):
             def detect(self, project):
-                return [Candidate("fixed", {"type": "global"}, "test", "config")]
+                return [Candidate("fixed", Scope.everywhere(), "test", "config")]
 
         self.assertEqual([c.text for c in Discoverer(detectors=[Fixed()]).run(self.root)], ["fixed"])
 
@@ -245,6 +245,88 @@ class TestExtensibility(Fixture):
         self.many("src/ok{i}.rs", 10, "fn f() -> Result<(), E> { g()?; Ok(()) }\n")
         strict = Discoverer(Thresholds(free_ratio=1.01)).run(self.root)
         self.assertFalse([c for c in strict if "unwrap" in c.text])
+
+
+class TestCandidates(Fixture):
+    def test_candidates_carry_typed_scopes(self):
+        self.write("composer.json", json.dumps({"require": {"laravel/framework": "^11", "php": "^8.3"}}))
+        by_text = {c.text: c for c in discover(self.root)}
+        self.assertEqual(by_text["Target PHP ^8.3; use language features available there, nothing newer."].scope, Scope.for_globs("**/*.php"))
+        self.assertEqual(by_text["This is a Laravel project: follow Laravel conventions (Eloquent, service container, Artisan generators)."].scope,
+                         Scope.everywhere())
+
+    def test_finds_lopsided_conventions_and_ignores_vendored(self):
+        self.write(".editorconfig", "[*]\nindent_style = space\nindent_size = 4\nend_of_line = lf\n")
+        self.write("composer.json", json.dumps({"require": {"php": "^8.3", "laravel/framework": "^11"}, "require-dev": {"pestphp/pest": "^3"}}))
+        self.many("src/ui/Card{i}.vue", 6, '<script setup lang="ts">\nconst a = 1;\n</script>\n')
+        self.many("public/js/v{i}.js", 6, 'var a = "x";\n' * 50)   # vendored double-quoted JS must not influence the quote rule
+        texts = self.texts()
+        joined = "\n".join(texts)
+        self.assertIn("Formatting for all files: indent with 4 spaces; LF line endings.", texts)
+        self.assertIn("Write Vue components with <script setup>.", texts)
+        self.assertIn("Write PHP tests with Pest", joined)
+        self.assertIn("Target PHP ^8.3", joined)
+        self.assertNotIn("double quotes", joined)
+        self.assertTrue(any("PascalCase" in t for t in texts))
+
+
+class TestEcosystems(Fixture):
+    def collect(self, files):
+        for rel, text in files.items():
+            self.write(rel, text)
+        return {c.text: c for c in ecosystems.collect(self.root)}
+
+    def test_python(self):
+        out = self.collect({
+            "requirements.txt": "fastapi==0.110\npytest>=8\n# comment\n-r other.txt\n",
+            "pyproject.toml": '[project]\nrequires-python = ">=3.11"\ndependencies = ["pydantic>=2", "sqlalchemy[asyncio]"]\n[tool.ruff]\nline-length = 100\n',
+        })
+        joined = "\n".join(out)
+        for needle in ("FastAPI", "pydantic", "SQLAlchemy", "pytest", "ruff", "Target Python >=3.11"):
+            self.assertIn(needle, joined)
+
+    def test_go_and_rust(self):
+        out = "\n".join(self.collect({
+            "go.mod": "module x\n\ngo 1.22\n\nrequire (\n\tgithub.com/gin-gonic/gin v1.9.1\n\tgithub.com/stretchr/testify v1.8.0\n)\n",
+            "Cargo.toml": '[package]\nedition = "2021"\n[dependencies]\ntokio = { version = "1" }\nanyhow = "1"\n[dev-dependencies.mockall]\nversion = "0.1"\n',
+            ".golangci.yml": "linters: {}\n",
+        }))
+        for needle in ("Target Go 1.22", "Gin", "testify", "Rust edition 2021", "tokio", "anyhow", "golangci-lint"):
+            self.assertIn(needle, out)
+
+    def test_jvm_dotnet_ruby_make(self):
+        out = "\n".join(self.collect({
+            "pom.xml": "<project><properties><java.version>21</java.version></properties><dependencies><dependency><artifactId>spring-boot-starter-web</artifactId></dependency></dependencies></project>",
+            "build.gradle.kts": 'dependencies { testImplementation("org.junit.jupiter:junit-jupiter:5.10.0") }\n',
+            "App/App.csproj": '<Project><PropertyGroup><TargetFramework>net8.0</TargetFramework><Nullable>enable</Nullable></PropertyGroup><ItemGroup><PackageReference Include="Serilog" Version="3" /></ItemGroup></Project>',
+            "Gemfile": "ruby '3.3.0'\ngem 'rails'\ngem \"rspec-rails\"\n",
+            "Makefile": "lint:\n\techo\ntest:\n\techo\n",
+        }))
+        for needle in ("Target Java 21", "Spring Boot web", "JUnit 5", "Target net8.0", "Nullable reference", "Serilog",
+                       "Target Ruby 3.3.0", "Rails", "RSpec", "`make lint`"):
+            self.assertIn(needle, out)
+
+    def test_dart_elixir_scala_cmake(self):
+        out = "\n".join(self.collect({
+            "pubspec.yaml": "name: x\ndependencies:\n  flutter:\n    sdk: flutter\n  provider: ^6.0.0\n",
+            "mix.exs": "defp deps do\n  [{:phoenix, \"~> 1.7\"}, {:ecto_sql, \"~> 3.10\"}]\nend\n",
+            "build.sbt": 'addSbtPlugin("org.playframework" % "sbt-plugin" % "3.0.0")\n',
+            "CMakeLists.txt": "find_package(Qt6 REQUIRED COMPONENTS Widgets)\n",
+        }))
+        facts = ecosystems.read_facts(self.root).deps
+        for dep in ("flutter", "provider", "phoenix", "org.playframework", "qt6"):
+            self.assertIn(dep, facts)
+
+    def test_tolerates_garbage_manifests(self):
+        out = self.collect({"package.json": "{not json", "composer.json": "[]", "go.mod": "\x00\x01", "Cargo.toml": "[[["})
+        self.assertEqual(out, {})
+
+    def test_absent_markers_need_enough_clean_files(self):
+        self.many("src/api/m{i}.rs", 10, "fn f() -> Result<(), E> { g()?; Ok(()) }\n")
+        want = "Avoid .unwrap() in non-test code; propagate errors with `?`."
+        self.assertIn(want, self.texts())
+        self.many("src/api/bad{i}.rs", 2, "fn f() { g().unwrap(); }\n")
+        self.assertNotIn(want, self.texts())
 
 
 if __name__ == "__main__":

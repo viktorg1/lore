@@ -5,8 +5,6 @@ import os
 import re
 from pathlib import Path
 
-from mapper import LANGS
-
 SKIP_PARTS = {".history", "playwright-report", "test-results", "build", "dist", "storage"}
 VENDORED_RX = re.compile(r"(^|/)public/(js|css|build|vendor|fonts)/|(^|/)(vendor|node_modules)/|\.min\.|\.lock$|package-lock\.json$")
 TEST_RX = re.compile(

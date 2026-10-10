@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from core.models import Scope
+
 from ..markers import Marker
 
 
@@ -20,5 +22,5 @@ class Language:
         e = sorted(self.extensions)
         return "**/*." + (e[0] if len(e) == 1 else "{" + ",".join(e) + "}")
 
-    def scope(self) -> dict:
-        return {"type": "glob", "globs": [self.glob]}
+    def scope(self) -> Scope:
+        return Scope.for_globs(self.glob)
