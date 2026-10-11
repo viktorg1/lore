@@ -175,6 +175,18 @@ def _json(fp: Path) -> dict:
         return {}
 
 
+_VERSION_WORDS = {"x", "dev", "rc", "alpha", "beta", "stable", "lts", "latest", "v", "php", "net", "netcoreapp",
+                  "netstandard", "windows", "android", "ios", "macos", "maccatalyst", "browser", "linux", "tvos"}
+
+
+def _version(value) -> str | None:
+    """`value` if it looks like a version or version constraint (">=3.10", "^8.2 || ^8.3", "net8.0"), else None."""
+    v = str(value).strip()
+    if not 0 < len(v) <= 40 or not re.fullmatch(r"[\w.^~*<>=!|, +\-]+", v) or not re.search(r"\d", v):
+        return None
+    return v if all(w.lower() in _VERSION_WORDS for w in re.findall(r"[A-Za-z]+", v)) else None
+
+
 class Facts:
     def __init__(self):
         self.deps: dict[str, str] = {}      # lowercase dep -> file it came from
@@ -183,7 +195,11 @@ class Facts:
     def dep(self, name: str, file: str):
         self.deps.setdefault(name.lower(), file)
 
-    def note(self, text: str, scope: str, evidence: str):
+    def note(self, text: str, scope: str, evidence: str, value: str | None = None):
+        """Record a fact. If `value` (a version string read from a manifest) is given and does not look like a
+        version, the fact is dropped: manifests are untrusted text and must not smuggle sentences into rules."""
+        if value is not None and _version(value) is None:
+            return
         self.notes.append((text, scope, evidence))
 
 
@@ -194,7 +210,7 @@ def _composer(root: Path, f: Facts):
             f.dep(d, "composer.json")
     php = _mapping(j.get("require")).get("php")
     if php:
-        f.note(f"Target PHP {php}; use language features available there, nothing newer.", "php", f"composer.json require.php = {php}")
+        f.note(f"Target PHP {php}; use language features available there, nothing newer.", "php", f"composer.json require.php = {php}", value=php)
 
 
 def _package_json(root: Path, f: Facts):
@@ -204,7 +220,7 @@ def _package_json(root: Path, f: Facts):
             f.dep(d, "package.json")
     node = _mapping(j.get("engines")).get("node")
     if node:
-        f.note(f"Target Node {node}.", "js", f"package.json engines.node = {node}")
+        f.note(f"Target Node {node}.", "js", f"package.json engines.node = {node}", value=node)
     scripts = _mapping(j.get("scripts"))
     cmds = [f"`npm run {k}`" for k in SCRIPT_KEYS if k in scripts]
     if cmds:
@@ -230,7 +246,7 @@ def _python(root: Path, f: Facts):
             f.dep(m.group(1).replace("_", "-"), "pyproject.toml")
         m = re.search(r"""requires-python\s*=\s*["']([^"']+)["']""", text)
         if m:
-            f.note(f"Target Python {m.group(1)}; use language features available there.", "py", f"pyproject.toml requires-python = {m.group(1)}")
+            f.note(f"Target Python {m.group(1)}; use language features available there.", "py", f"pyproject.toml requires-python = {m.group(1)}", value=m.group(1))
 
 
 def _go(root: Path, f: Facts):
@@ -239,7 +255,7 @@ def _go(root: Path, f: Facts):
         return
     m = re.search(r"^go\s+(\S+)", text, re.M)
     if m:
-        f.note(f"Target Go {m.group(1)}.", "go", f"go.mod go {m.group(1)}")
+        f.note(f"Target Go {m.group(1)}.", "go", f"go.mod go {m.group(1)}", value=m.group(1))
     for line in text.splitlines():
         m = re.match(r"\s*(?:require\s+)?([A-Za-z0-9.\-]+\.[a-z]+/[^\s]+)\s+v", line)
         if m:
@@ -255,7 +271,7 @@ def _cargo(root: Path, f: Facts):
         return
     m = re.search(r"""^edition\s*=\s*["'](\d+)["']""", text, re.M)
     if m:
-        f.note(f"Rust edition {m.group(1)}.", "rs", f"Cargo.toml edition = {m.group(1)}")
+        f.note(f"Rust edition {m.group(1)}.", "rs", f"Cargo.toml edition = {m.group(1)}", value=m.group(1))
     section = ""
     for line in text.splitlines():
         h = re.match(r"\s*\[([^\]]+)\]", line)
@@ -276,7 +292,7 @@ def _jvm(root: Path, f: Facts):
         f.dep(m.group(1).strip(), "pom.xml")
     m = re.search(r"<(?:java\.version|maven\.compiler\.(?:source|release)|release)>(\d+)</", pom)
     if m:
-        f.note(f"Target Java {m.group(1)}.", "jvm", f"pom.xml java {m.group(1)}")
+        f.note(f"Target Java {m.group(1)}.", "jvm", f"pom.xml java {m.group(1)}", value=m.group(1))
     for name in ("build.gradle", "build.gradle.kts"):
         g = _read(root / name)
         for m in re.finditer(r"""["']([\w.\-]+):([\w.\-]+)(?::[^"']*)?["']""", g):
@@ -285,7 +301,7 @@ def _jvm(root: Path, f: Facts):
             f.dep(m.group(1), name)
         m = re.search(r"(?:jvmToolchain|JavaVersion\.VERSION_|languageVersion.*?of)\(?\s*_?(\d+)", g)
         if m:
-            f.note(f"Target JVM {m.group(1)}.", "jvm", f"{name} jvm {m.group(1)}")
+            f.note(f"Target JVM {m.group(1)}.", "jvm", f"{name} jvm {m.group(1)}", value=m.group(1))
 
 
 def _dotnet(root: Path, f: Facts):
@@ -299,7 +315,7 @@ def _dotnet(root: Path, f: Facts):
             f.dep(m.group(1), name)
         m = re.search(r"<TargetFramework>([^<]+)</TargetFramework>", text)
         if m:
-            f.note(f"Target {m.group(1)}.", "cs", f"{name} TargetFramework")
+            f.note(f"Target {m.group(1)}.", "cs", f"{name} TargetFramework", value=m.group(1))
         if re.search(r"<Nullable>enable</Nullable>", text):
             f.note("Nullable reference types are enabled: annotate nullability and do not suppress warnings with `!`.", "cs", f"{name} Nullable=enable")
         if re.search(r"<TreatWarningsAsErrors>true</TreatWarningsAsErrors>", text):
@@ -312,7 +328,7 @@ def _ruby(root: Path, f: Facts):
         f.dep(m.group(1), "Gemfile")
     m = re.search(r"""^\s*ruby\s+["']([^"']+)["']""", text, re.M)
     if m:
-        f.note(f"Target Ruby {m.group(1)}.", "rb", f"Gemfile ruby {m.group(1)}")
+        f.note(f"Target Ruby {m.group(1)}.", "rb", f"Gemfile ruby {m.group(1)}", value=m.group(1))
 
 
 def _build_tools(root: Path, f: Facts):

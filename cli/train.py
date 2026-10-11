@@ -49,5 +49,7 @@ def main(argv=None) -> int:
     print(f"Read {stats.files} file(s): {stats.added} rule(s) added, "
           f"{stats.duplicate} duplicate(s), {stats.promoted} promoted"
           + (f", {stats.skipped_generated} generated file(s) ignored" if stats.skipped_generated else ""))
+    for line in stats.problems():
+        print(line)
     print(f"Review with: review.py --name {args.name} list")
     return 0

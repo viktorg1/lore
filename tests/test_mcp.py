@@ -61,11 +61,14 @@ class TestLoreTools(RegisteredProject):
         self.assertNotIn(self.pending.id, usage)                                 # pending rules are never handed over
 
     def test_only_rules_that_fit_the_budget_count(self):
-        self.repo.add("Wrap third party SDK calls in an adapter module for every service", Scope.for_section("src"), Status.ACTIVE)
-        text = self.call("get_rules", paths=[str(self.root / "src" / "a.py")], max_tokens=30)
+        for i in range(8):
+            self.repo.add(f"Wrap third party SDK number {i} calls in an adapter module so that the vendor can be replaced "
+                          f"later without touching the business code in any of the services", Scope.for_section("src"), Status.ACTIVE)
+        text = self.call("get_rules", paths=[str(self.root / "src" / "a.py")], max_tokens=100)
         served = UsageLog("app").all()
         self.assertEqual(len(served), text.count("\n- ["))                        # exactly the lines shown
-        self.assertLess(len(served), 2)
+        self.assertLess(len(served), 9)
+        self.assertIn("left out", text)
 
     def test_nothing_is_counted_when_nothing_applies_or_no_project_matches(self):
         self.call("get_rules", paths=[str(self.root / "README.md")])             # only the section rule exists, root file

@@ -8,6 +8,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 
+from core import sanitize
 from core.mapper import section_of
 from core.models import Scope
 
@@ -28,8 +29,8 @@ def usable(comments: list[ReviewComment], *, include_bots: bool = False, reviewe
     """Comments that carry a reviewer's own, actionable remark, in a stable order."""
     items = []
     for c in sorted(comments, key=lambda c: (c.created, c.id)):
-        if c.is_reply or (c.is_bot and not include_bots):
-            continue
+        if c.is_reply or (c.is_bot and not include_bots) or sanitize.hidden_count(c.body):
+            continue          # a comment hiding characters is never evidence for a rule
         if reviewers and c.author.lower() not in reviewers:
             continue
         cleaned = text.clean(c.body)
@@ -102,7 +103,9 @@ def propose(comments: list[ReviewComment], *, min_repeats: int = 3, min_prs: int
             continue
         rep = representative(members)
         shown = ", ".join(f"#{p}" for p in prs[:5]) + (", …" if len(prs) > 5 else "")
+        disagree = any(text.prohibits(m.cleaned) != text.prohibits(rep.cleaned) for m in members)
         out.append(Proposal(
             text=text.rule_text(rep.cleaned), scope=scope_for(cs), comments=cs,
-            evidence=f"{len(cs)} similar review comments on {len(prs)} PRs ({shown})"))
+            evidence=f"{len(cs)} similar review comments on {len(prs)} PRs ({shown})"
+                     + ("; check them: some may ask for the opposite" if disagree else "")))
     return sorted(out, key=lambda p: (-len(p.comments), p.text))

@@ -6,6 +6,7 @@ import os
 import re
 import tempfile
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -48,6 +49,23 @@ def save_json(path: Path, data) -> None:
         if os.path.exists(tmp):
             os.unlink(tmp)
         raise
+
+
+@contextmanager
+def locked(path: Path):
+    """Hold an exclusive lock on `path` (a lock file) across processes, for a read-modify-write.
+
+    Uses flock where the platform has it; elsewhere it quietly does nothing. Locks are per file, so use a
+    different lock file per resource and always take them in the same order.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a+") as handle:
+        try:
+            import fcntl
+            fcntl.flock(handle, fcntl.LOCK_EX)
+        except ImportError:
+            pass
+        yield
 
 
 def now() -> str:

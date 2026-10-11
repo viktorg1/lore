@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum, IntEnum
 
-from . import textutil
+from . import sanitize, textutil
 from .globs import glob_match, split_globs
 from .mapper import section_of
 
@@ -66,11 +66,14 @@ class Scope:
 
     @classmethod
     def for_section(cls, name: str) -> Scope:
-        return cls(ScopeKind.SECTION, section=name.strip().strip("/"))
+        """Raises ValueError for names with hidden, quote, backslash or newline characters."""
+        return cls(ScopeKind.SECTION, section=sanitize.clean_scope_token(name.strip().strip("/"), "section name"))
 
     @classmethod
     def for_globs(cls, *globs: str) -> Scope:
-        return cls(ScopeKind.GLOB, globs=tuple(globs))
+        if not globs:
+            raise ValueError("a glob scope needs at least one pattern")
+        return cls(ScopeKind.GLOB, globs=tuple(sanitize.clean_scope_token(g, "glob") for g in globs))
 
     @classmethod
     def parse(cls, spec: str | None) -> Scope:
@@ -141,6 +144,11 @@ class Rule:
     extra: dict = field(default_factory=dict)         # unknown keys from the file survive a load/save round-trip
 
     _KNOWN = ("id", "text", "scope", "status", "source", "evidence", "created", "hits", "edited", "refs")
+
+    @property
+    def hidden(self) -> int:
+        """How many hidden characters the stored text contains (rules saved before the checks existed)."""
+        return sanitize.hidden_count(self.text)
 
     @staticmethod
     def make_id(text: str, scope: Scope) -> str:

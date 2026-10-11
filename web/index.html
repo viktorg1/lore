@@ -313,7 +313,9 @@ function card(r) {
   if (state.editing === r.id) return editor(r);
   const key = `rm:${r.id}`;
   const actions = [];
-  if (r.status === "pending") actions.push(h("button", { class: "btn primary", onclick: guard(async () => { await act(r, { action: "approve" }); await refresh(); }) }, "Approve"));
+  if (r.status === "pending") actions.push(h("button", { class: "btn primary", disabled: r.hidden > 0,
+    title: r.hidden ? "This rule contains hidden characters: edit or reject it first" : null,
+    onclick: guard(async () => { await act(r, { action: "approve" }); await refresh(); }) }, "Approve"));
   actions.push(h("button", { class: "btn", onclick: () => { state.editing = r.id; state.adding = false; state.sure = null; renderMain(); } }, "Edit"));
   if (r.status === "active") actions.push(h("button", { class: "btn", onclick: guard(async () => { await act(r, { action: "unapprove" }); await refresh(); }) }, "Unapprove"));
   actions.push(h("button", { class: "btn danger" + (state.sure === key ? " sure" : ""),
@@ -325,6 +327,8 @@ function card(r) {
       h("div", { class: "text" }, r.text),
       h("div", { class: "meta" },
         h("span", { class: "chip scope" }, r.scope),
+        r.hidden ? h("span", { class: "chip bad", title: "Hidden characters are shown as <U+XXXX>. This rule is never served to an agent or exported until you fix it." },
+          `⚠ ${r.hidden} hidden character${r.hidden === 1 ? "" : "s"}`) : null,
         r.source ? h("span", { class: "chip" }, r.source) : null,
         r.evidence ? h("span", { class: "evidence" }, r.evidence) : null,
         refLinks(r.refs),
@@ -390,7 +394,10 @@ function newRuleForm() {
     try { res = await api("POST", `/api/projects/${enc(state.current)}/rules`, { text: n.text, scope: n.scope.trim() || "global", status: n.status }); }
     catch (e) { n.error = e.message; err.textContent = e.message; return; }
     if (res.outcome === "duplicate") { n.error = `Already known as rule ${res.rule.id} (${res.rule.status}); nothing added.`; err.textContent = n.error; return; }
-    state.adding = false; state.tab = res.rule.status; toast("Rule added", true); await refresh();
+    state.adding = false; state.tab = res.rule.status;
+    if (res.conflicts && res.conflicts.length) toast(`Added, but it may contradict “${res.conflicts[0].text}” (${res.conflicts[0].status}). Check both.`);
+    else toast("Rule added", true);
+    await refresh();
   });
   const cancel = () => { state.adding = false; renderMain(); };
   const keys = (e) => { if (e.key === "Escape") cancel(); else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) add(); };
@@ -492,7 +499,7 @@ function renderRegister() {
   });
   $("list").replaceChildren(h("section", { class: "form" },
     h("h2", {}, "Register a project"),
-    h("p", {}, "Maps the project folder (memorize.py) so lore can scope rules to its sections. Existing instruction files such as AGENTS.md are imported as rules."),
+    h("p", {}, "Maps the project folder (memorize.py) so lore can scope rules to its sections. Existing instruction files such as AGENTS.md are imported as pending rules for you to approve."),
     field("Project folder", textInput(R, "path", { placeholder: "~/projects/myapp", label: "Project folder" })),
     field("Name (optional, defaults to the folder name)", textInput(R, "name", { placeholder: "myapp", label: "Name" })),
     h("div", { class: "row" }, checkbox(R, "noImport", "Don't import existing instruction files"), h("span", { style: "flex:1" }),

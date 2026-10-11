@@ -22,14 +22,26 @@ def is_generated(text: str) -> bool:
 class SyncResult:
     written: list[Path] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)   # ids of section rules whose section is not in the map
+    withheld: list[str] = field(default_factory=list)  # ids of rules not exported because their text hides characters
+    refused: list[str] = field(default_factory=list)   # files left alone because they are symlinks
+
+
+def _yaml_quoted(value: str) -> str:
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
 def sync_copilot(project: Project) -> SyncResult:
-    """Write active rules to <root>/.github/instructions/lore-*.instructions.md, grouped by scope."""
+    """Write active rules to <root>/.github/instructions/lore-*.instructions.md, grouped by scope.
+
+    Rules whose text hides characters are not exported, and nothing is written through a symlink or outside the project.
+    """
     sections = project.load_map()["sections"]
     groups: dict[str, tuple[str, list[str]]] = {}   # file slug -> (applyTo, [rule texts])
     result = SyncResult()
     for rule in RuleRepository(project.name).with_status(Status.ACTIVE):
+        if rule.hidden:
+            result.withheld.append(rule.id)
+            continue
         scope = rule.scope
         if scope.kind is ScopeKind.GLOBAL:
             slug, apply_to = "global", "**"
@@ -48,12 +60,18 @@ def sync_copilot(project: Project) -> SyncResult:
 
     outdir = project.root / ".github" / "instructions"
     outdir.mkdir(parents=True, exist_ok=True)
+    if not outdir.resolve().is_relative_to(project.root.resolve()):
+        raise ValueError(f"refusing to write instruction files: {outdir} resolves outside the project")
     for slug, (apply_to, texts) in sorted(groups.items()):
         fp = outdir / f"lore-{slug}.instructions.md"
+        if fp.is_symlink():
+            result.refused.append(str(fp))
+            continue
         body = "\n".join(f"- {t}" for t in texts)
-        fp.write_text(f'---\napplyTo: "{apply_to}"\n---\n{GENERATED_MARKER}\n\n{body}\n', encoding="utf-8")
+        fp.write_text(f'---\napplyTo: {_yaml_quoted(apply_to)}\n---\n{GENERATED_MARKER}\n\n{body}\n', encoding="utf-8")
         result.written.append(fp)
     for old in outdir.glob("lore-*.instructions.md"):   # prune stale generated files
-        if old not in result.written and is_generated(old.read_text(encoding="utf-8", errors="replace")):
+        if old not in result.written and not old.is_symlink() \
+                and is_generated(old.read_text(encoding="utf-8", errors="replace")):
             old.unlink()
     return result

@@ -51,7 +51,7 @@ class TestApi(RegisteredProject):
         self.assertEqual({r["status"] for r in data["rules"]}, {"active", "pending"})
         self.assertEqual(data["rules"][0]["evidence"], "12/12 files")
         self.assertEqual(set(data["rules"][0]), {"id", "text", "scope", "status", "source", "evidence", "created", "refs",
-                                                  "served", "last_served"})
+                                                  "served", "last_served", "hidden"})
         self.assertEqual(data["rules"][0]["refs"], [])
 
     def test_views_carry_usage(self):

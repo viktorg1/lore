@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .export import is_generated
@@ -10,6 +10,7 @@ from .globs import split_globs
 from .models import Outcome, Scope, Status
 from .projects import Project
 from .repository import RuleRepository
+from .sanitize import RuleTextError
 
 TEXT_EXTS = {".md", ".mdx", ".mdc", ".txt"}
 SPECIAL_NAMES = {".cursorrules", ".windsurfrules"}
@@ -49,7 +50,10 @@ def extract(text: str, section_names: list[str]) -> list[Extracted]:
     meta, body = parse_frontmatter(text)
     globs = [g for g in split_globs(meta.get("applyTo") or meta.get("globs") or "")
              if g not in ("**", "**/*")]
-    file_scope = Scope.for_globs(*globs) if globs else None
+    try:
+        file_scope = Scope.for_globs(*globs) if globs else None
+    except ValueError:      # a malformed applyTo: fall back to the headings
+        file_scope = None
 
     items: list[tuple[str, list[str]]] = []  # (text, heading chain)
     paragraphs: list[tuple[str, list[str]]] = []
@@ -117,7 +121,10 @@ def _scope_from_headings(chain: list[str], section_names: list[str]) -> Scope:
         hits = {s for s in section_names
                 if s != "root" and re.search(rf"\b{re.escape(s.rsplit('/', 1)[-1])}\b", heading, re.I)}
         if len(hits) == 1:
-            return Scope.for_section(hits.pop())
+            try:
+                return Scope.for_section(hits.pop())
+            except ValueError:
+                break
     return Scope.everywhere()
 
 
@@ -131,20 +138,55 @@ def find_documents(target: Path) -> list[Path]:
     )
 
 
+MAX_NOTES = 5
+
+
 @dataclass
 class TrainStats:
+    """What a bulk import did. Rules that may not be stored are skipped and counted, never fatal."""
     files: int = 0
     added: int = 0
     duplicate: int = 0
     promoted: int = 0
     skipped_generated: int = 0
+    rejected: int = 0            # text that failed the hygiene checks (hidden characters, too long, ...)
+    conflicts: int = 0           # rules added that reverse the meaning of a similar existing rule
+    notes: list[str] = field(default_factory=list)
+
+    _COUNTERS = ("files", "added", "duplicate", "promoted", "skipped_generated", "rejected", "conflicts")
 
     def count(self, outcome: Outcome) -> None:
         setattr(self, outcome.value, getattr(self, outcome.value) + 1)
 
+    def add(self, repo: RuleRepository, text: str, scope: Scope, status: Status, source: str,
+            evidence: str = "", refs: list[str] | None = None) -> None:
+        """repo.add(...) that records the outcome, or the reason the rule was refused."""
+        try:
+            result = repo.add(text, scope, status, source=source, evidence=evidence, refs=refs)
+        except RuleTextError as e:
+            self.rejected += 1
+            if len(self.notes) < MAX_NOTES:
+                self.notes.append(f"rejected {text[:50]!r}: {e}")
+            return
+        self.count(result.outcome)
+        if result.conflicts:
+            self.conflicts += 1
+            if len(self.notes) < MAX_NOTES:
+                self.notes.append(f"{result.rule.id} may conflict with {result.conflicts[0].id}: {result.conflicts[0].text[:60]!r}")
+
     def merge(self, other: TrainStats) -> None:
-        for name in ("files", "added", "duplicate", "promoted", "skipped_generated"):
+        for name in self._COUNTERS:
             setattr(self, name, getattr(self, name) + getattr(other, name))
+        self.notes = (self.notes + other.notes)[:MAX_NOTES]
+
+    def problems(self) -> list[str]:
+        """Lines for a person: what was refused or looks contradictory."""
+        out = []
+        if self.rejected:
+            out.append(f"{self.rejected} rule(s) refused (hidden characters, markup or too long)")
+        if self.conflicts:
+            out.append(f"{self.conflicts} new rule(s) may contradict an existing one: review them")
+        return out + [f"  {n}" for n in self.notes]
 
 
 def train(project: Project, target: Path, scope_override: Scope | None = None,
@@ -165,5 +207,5 @@ def train(project: Project, target: Path, scope_override: Scope | None = None,
         except ValueError:
             source = doc.name
         for item in extract(text, section_names):
-            stats.count(repo.add(item.text, scope_override or item.scope, status=status, source=source).outcome)
+            stats.add(repo, item.text, scope_override or item.scope, status, source)
     return stats

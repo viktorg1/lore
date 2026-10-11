@@ -24,6 +24,7 @@ class UsageLog:
     def __init__(self, project: Project | str):
         name = project.name if isinstance(project, Project) else project
         self._path = store.project_dir(name) / "usage.json"
+        self._lock = store.project_dir(name) / ".usage.lock"
 
     def all(self) -> dict[str, Usage]:
         """Usage by rule id. Anything unreadable counts as 'no usage recorded'."""
@@ -47,19 +48,21 @@ class UsageLog:
         ids = list(dict.fromkeys(rule_ids))
         if not ids:
             return
-        usage, stamp = self.all(), when or store.now()
-        for rule_id in ids:
-            usage[rule_id] = Usage(usage.get(rule_id, Usage()).served + 1, stamp)
-        self._write(usage)
+        with store.locked(self._lock):
+            usage, stamp = self.all(), when or store.now()
+            for rule_id in ids:
+                usage[rule_id] = Usage(usage.get(rule_id, Usage()).served + 1, stamp)
+            self._write(usage)
 
     def forget(self, rule_ids: Iterable[str]) -> None:
         """Drop the entries of deleted rules."""
-        usage = self.all()
-        gone = [i for i in rule_ids if i in usage]
-        if gone:
-            for rule_id in gone:
-                del usage[rule_id]
-            self._write(usage)
+        with store.locked(self._lock):
+            usage = self.all()
+            gone = [i for i in rule_ids if i in usage]
+            if gone:
+                for rule_id in gone:
+                    del usage[rule_id]
+                self._write(usage)
 
     def _write(self, usage: dict[str, Usage]) -> None:
         store.save_json(self._path, {"version": VERSION, "rules": {

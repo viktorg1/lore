@@ -1,8 +1,9 @@
 """Review, edit and export a project's rules.
 
-    review.py --name P list [--status pending|active]
+    review.py --name P list [--status pending|active] [--details]
     review.py --name P add "Use the repository layer for DB access" [--scope section:api] [--pending]
     review.py --name P approve <id>... | --all
+    review.py --name P unapprove <id>...       (back to pending)
     review.py --name P reject <id>...          (rejected rules are deleted)
     review.py --name P edit <id> [--text "new wording"] [--scope section:api]
     review.py --name P usage                   (which approved rules the agent actually receives; unused first)
@@ -15,7 +16,7 @@ import os
 import sys
 from pathlib import Path
 
-from core import export, resolver
+from core import export, resolver, sanitize
 from core.models import Status
 from core.projects import Project
 from core.repository import RuleRepository
@@ -29,9 +30,11 @@ def build_parser():
     ap.add_argument("--name", required=True)
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("list"); p.add_argument("--status", choices=[s.value for s in Status])
+    p.add_argument("--details", action="store_true", help="also show where each rule came from")
     p = sub.add_parser("add"); p.add_argument("text"); p.add_argument("--scope", default="global")
     p.add_argument("--pending", action="store_true")
     p = sub.add_parser("approve"); p.add_argument("ids", nargs="*"); p.add_argument("--all", action="store_true")
+    p = sub.add_parser("unapprove"); p.add_argument("ids", nargs="+")
     p = sub.add_parser("reject"); p.add_argument("ids", nargs="+")
     p = sub.add_parser("edit"); p.add_argument("id"); p.add_argument("--text"); p.add_argument("--scope")
     p = sub.add_parser("resolve"); p.add_argument("paths", nargs="+")
@@ -56,9 +59,26 @@ def _relative(root: Path, p: str) -> str:
 
 def cmd_list(project: Project, args) -> int:
     shown = [r for r in RuleRepository(project.name).all() if not args.status or r.status.value == args.status]
+    hidden = 0
     for r in shown:
-        print(f"{r.id}  {r.status.value:<7} {r.scope.key:<24} {r.text}")
+        flag = f"  [!! {r.hidden} hidden character(s) shown as <U+XXXX>]" if r.hidden else ""
+        hidden += bool(r.hidden)
+        print(f"{r.id}  {r.status.value:<7} {r.scope.key:<24} {sanitize.reveal(r.text)}{flag}")
+        if args.details:
+            bits = [f"source: {r.source or '-'}", f"created: {r.created or '-'}"]
+            if r.edited:
+                bits.append(f"edited: {r.edited}")
+            if r.hits:
+                bits.append(f"re-proposed {r.hits}x")
+            print("          " + "  ".join(bits))
+            if r.evidence:
+                print(f"          evidence: {r.evidence}")
+            for ref in r.refs[:5]:
+                print(f"          link: {ref}")
     print(f"-- {len(shown)} rule(s)")
+    if hidden:
+        print(f"warning: {hidden} rule(s) contain hidden characters; they are never served or exported, and cannot be "
+              "approved until you edit or reject them.", file=sys.stderr)
     return 0
 
 
@@ -69,16 +89,33 @@ def cmd_add(project: Project, args) -> int:
     except ValueError as e:
         raise CliError(str(e))
     print(f"{result.outcome}: {result.rule.id}")
+    for other in result.conflicts:
+        print(f"warning: may contradict rule {other.id} ({other.status}): {other.text}", file=sys.stderr)
     return 0
 
 
 def cmd_approve(project: Project, args) -> int:
     repo, ids = RuleRepository(project.name), args.ids
     if args.all:
-        ids = [r.id for r in repo.with_status(Status.PENDING)]
-    done = repo.set_status(ids, Status.ACTIVE)
+        pending = repo.with_status(Status.PENDING)
+        ids = [r.id for r in pending if not r.hidden]
+        if len(ids) != len(pending):
+            print(f"warning: {len(pending) - len(ids)} pending rule(s) contain hidden characters and were not approved",
+                  file=sys.stderr)
+    try:
+        done = repo.set_status(ids, Status.ACTIVE)
+    except ValueError as e:
+        raise CliError(str(e))
     print(f"approved {len(done)} rule(s)")
     if len(done) != len(ids):
+        print("warning: some ids were not found", file=sys.stderr)
+    return 0
+
+
+def cmd_unapprove(project: Project, args) -> int:
+    done = RuleRepository(project.name).set_status(args.ids, Status.PENDING)
+    print(f"moved {len(done)} rule(s) back to pending")
+    if len(done) != len(args.ids):
         print("warning: some ids were not found", file=sys.stderr)
     return 0
 
@@ -122,6 +159,9 @@ def cmd_usage(project: Project, args) -> int:
         print(f"{u.served or 'never':<7} {u.last_served or '-':<19} {r.id:<8}  {r.scope.key:<24} {r.text}")
     unused = sum(1 for r in rules if usage.get(r.id, Usage()).served == 0)
     print(f"-- {len(rules)} approved rule(s); {unused} never served")
+    if len(rules) > resolver.MAX_RULES:
+        print(f"note: the agent receives at most {resolver.MAX_RULES} rules per call (most specific first); with "
+              f"{len(rules)} approved, some will rarely be served. Consider pruning the unused ones.")
     if rules and unused == len(rules):
         print("Nothing has been served yet: this counts what an agent receives through the MCP server's get_rules "
               "(not previews such as `review.py resolve`).")
@@ -132,11 +172,15 @@ def cmd_sync(project: Project, args) -> int:
     result = export.sync_copilot(project)
     if result.skipped:
         print(f"warning: {len(result.skipped)} section rule(s) skipped: section not in map (re-run memorize.py)", file=sys.stderr)
+    if result.withheld:
+        print(f"warning: {len(result.withheld)} rule(s) not exported: hidden characters in their text", file=sys.stderr)
+    if result.refused:
+        print("warning: left alone because they are symlinks: " + ", ".join(result.refused), file=sys.stderr)
     print("\n".join(str(p) for p in result.written) if result.written else "no active rules to write")
     return 0
 
 
-COMMANDS = {"list": cmd_list, "add": cmd_add, "approve": cmd_approve, "reject": cmd_reject,
+COMMANDS = {"list": cmd_list, "add": cmd_add, "approve": cmd_approve, "unapprove": cmd_unapprove, "reject": cmd_reject,
             "edit": cmd_edit, "resolve": cmd_resolve, "usage": cmd_usage, "sync": cmd_sync}
 
 

@@ -11,7 +11,10 @@ MENTION = re.compile(r"(?<!\w)@[\w-]+")
 LABEL = re.compile(r"^\s*(?:\*\*)?(?:nit(?:pick)?|suggestion|optional|minor|question|thought|issue|todo|style|"
                    r"praise|chore|important|blocking|non-blocking)(?:\s*\([^)]*\))?(?:\*\*)?\s*[:\-–]\s*", re.I)
 POLITE = re.compile(r"^(?:(?:hey|hi|hello)[ ,]+)?(?:please|pls|plz|could you|can you|can we|could we|would you|"
+                    r"should we(?: maybe)?|why not|what about|how about|consider|we could|you could|might want to|"
+                    r"it(?:'s| is) better to|would it be (?:better|nicer|cleaner) to|"
                     r"maybe|perhaps|i think(?: we)?(?: should)?|we should|you should|let's|lets|just)\s+", re.I)
+PROHIBITION = re.compile(r"\b(?:do not|don'?t|never|avoid|must not|mustn'?t|should not|shouldn'?t|cannot|can'?t|no longer|stop)\b", re.I)
 PRAISE = re.compile(r"^(?:lgtm|looks good|looks great|nice|great|good|thanks|thank you|ty|done|fixed|ack|agreed|"
                     r"👍|\+1|sounds good|makes sense|ok|okay|yes|no|sure|same|ditto)\b[\s.!,]*$", re.I)
 DIRECTIVE = re.compile(r"\b(?:use|using|avoid|don'?t|do not|never|always|prefer|instead|should|must|need|remove|"
@@ -83,18 +86,24 @@ def similarity(a: frozenset[str], b: frozenset[str], min_shared: int = 3) -> flo
     return shared / len(a | b)
 
 
+def prohibits(cleaned: str) -> bool:
+    """Does the comment forbid something (as opposed to asking for something)?"""
+    return bool(PROHIBITION.search(cleaned))
+
+
 def imperative_score(cleaned: str) -> int:
     """Rough 'sounds like a rule' score used to pick the representative of a cluster."""
     return 2 * bool(DIRECTIVE.search(cleaned)) + (0 if cleaned.rstrip().endswith("?") else 1)
 
 
 def rule_text(cleaned: str, max_len: int = 200) -> str:
-    """A reviewer remark as a one-sentence instruction: drop politeness, keep the first sentence."""
-    s = POLITE.sub("", cleaned.strip())
-    s = POLITE.sub("", s)
-    first = re.split(r"(?<=[.!?])\s+(?=[A-Z`])", s, maxsplit=1)[0]
-    if len(tokens(first)) >= 2:
-        s = first
+    """A reviewer remark as a one-sentence instruction: the sentence that asks for something, without politeness."""
+    s = cleaned.strip()
+    parts = re.split(r"(?<=[.!?])\s+(?=[A-Z`])", s)
+    pick = next((p for p in parts if DIRECTIVE.search(p) and len(tokens(p)) >= 2), parts[0])
+    if len(tokens(pick)) >= 2:
+        s = pick
+    s = POLITE.sub("", POLITE.sub("", s.strip()))
     s = s.rstrip(" ?!.,;:") if s.endswith("?") else s.rstrip(" ,;:")
     if len(s) > max_len:
         s = s[:max_len].rsplit(" ", 1)[0].rstrip(" ,;:") + "…"

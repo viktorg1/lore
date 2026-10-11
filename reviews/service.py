@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable
 
+from core import sanitize
 from core.models import Status
 from core.projects import Project
 from core.repository import RuleRepository
@@ -62,10 +63,13 @@ class LearnResult:
     where: str
     proposals: list[Proposal]
     saved: TrainStats | None = None
+    ignored: int = 0          # comments left out because their text contains hidden characters
 
     def report(self, project_name: str, hints: dict[str, str] = CLI_HINTS) -> str:
         o = self.options
         lines = [f"Read {self.read} review comment(s) from {self.where}."]
+        if self.ignored:
+            lines.append(f"Ignored {self.ignored} comment(s) containing hidden characters (a sign of an attempt to hide text).")
         if not self.read:
             lines.append("Nothing to learn from on those pull requests." if o.prs else "Nothing to learn from yet.")
             return "\n".join(lines)
@@ -82,6 +86,7 @@ class LearnResult:
             lines.append(f"\n{len(self.proposals)} proposal(s). {hints['save']}")
         else:
             lines.append(f"\nSaved {self.saved.added} new pending rule(s); {self.saved.duplicate} already known.")
+            lines += self.saved.problems()
             lines.append(hints["next"].format(name=project_name))
         return "\n".join(lines)
 
@@ -102,15 +107,16 @@ def learn(project: Project, options: LearnOptions,
     where = describe_prs(options.prs) if options.prs else f"the last {options.since_days} days"
     if not comments:
         return LearnResult(options, 0, where, [])
+    ignored = sum(1 for c in comments if sanitize.hidden_count(c.body))
     ledger = Ledger(project)
     proposals = propose(comments, min_repeats=options.min_repeats, min_prs=options.effective_min_prs,
                         seen=set() if options.include_seen else ledger.seen(), include_bots=options.include_bots,
                         reviewers={r.lower() for r in options.reviewers} or None)
-    result = LearnResult(options, len(comments), where, proposals)
+    result = LearnResult(options, len(comments), where, proposals, ignored=ignored)
     if options.save and proposals:
         repo, stats = RuleRepository(project.name), TrainStats()
         for p in proposals:
-            stats.count(repo.add(p.text, p.scope, Status.PENDING, source="review", evidence=p.evidence, refs=p.refs).outcome)
+            stats.add(repo, p.text, p.scope, Status.PENDING, "review", p.evidence, p.refs)
         ledger.add([c.url for p in proposals for c in p.comments])
         result.saved = stats
     return result

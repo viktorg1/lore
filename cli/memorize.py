@@ -9,6 +9,7 @@ from pathlib import Path
 
 from core import projects, store, trainer
 from core.mapper import build_map
+from core.models import Status
 
 from .common import CliError, entry, make_parser
 
@@ -26,6 +27,8 @@ def main(argv=None) -> int:
     ap.add_argument("--name", help="memory name (default: last component of --path)")
     ap.add_argument("--no-import", action="store_true",
                     help="do not import existing instruction files (AGENTS.md, copilot-instructions.md, ...)")
+    ap.add_argument("--import-active", action="store_true",
+                    help="import them as active rules instead of pending ones that wait for your approval")
     args = ap.parse_args(argv)
 
     root = Path(os.path.expanduser(args.path)).resolve()
@@ -51,10 +54,14 @@ def main(argv=None) -> int:
         for rel in KNOWN_INSTRUCTION_FILES:
             target = root / rel
             if target.exists():
-                total.merge(trainer.train(project, target, base=root))
+                total.merge(trainer.train(project, target, base=root,
+                                          status=Status.ACTIVE if args.import_active else Status.PENDING))
         if total.files:
-            print(f"Imported {total.added} rule(s) from {total.files} existing instruction file(s) "
-                  f"({total.duplicate} duplicates skipped)")
+            state = "active" if args.import_active else "pending (approve them with review.py or the web UI)"
+            print(f"Imported {total.added} rule(s) from {total.files} existing instruction file(s) as {state}; "
+                  f"{total.duplicate} duplicates skipped")
+            for line in total.problems():
+                print(line)
 
     print(f"Memory: {project.dir}")
     print(f"Next: train.py --name {project.name} --from <folder>   |   review.py --name {project.name} list")

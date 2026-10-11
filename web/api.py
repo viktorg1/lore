@@ -7,6 +7,7 @@ import threading
 from pathlib import Path
 
 from core import projects, store
+from core import sanitize
 from core.models import Rule, Scope, Status
 from core.projects import Project
 from core.repository import RuleRepository
@@ -20,7 +21,8 @@ MAX_RESOLVE_PATHS = 20
 
 
 def rule_view(r: Rule, usage: Usage = Usage()) -> dict:
-    return {"id": r.id, "text": r.text, "scope": r.scope.key, "status": r.status.value,
+    hidden = r.hidden
+    return {"id": r.id, "text": sanitize.reveal(r.text) if hidden else r.text, "hidden": hidden, "scope": r.scope.key, "status": r.status.value,
             "source": r.source, "evidence": r.evidence, "created": r.created, "refs": list(r.refs),
             "served": usage.served, "last_served": usage.last_served}
 
@@ -74,10 +76,11 @@ class Api:
             raise ApiError(400, "status must be active or pending")
         try:
             with self._lock:
-                rule, outcome = RuleRepository(name).add(text, scope, status, source="ui")
+                result = RuleRepository(name).add(text, scope, status, source="ui")
         except ValueError as e:
             raise ApiError(400, str(e))
-        return {"rule": rule_view(rule, UsageLog(name).get(rule.id)), "outcome": outcome.value}
+        return {"rule": rule_view(result.rule, UsageLog(name).get(result.rule.id)), "outcome": result.outcome.value,
+                "conflicts": [{"id": c.id, "text": c.text, "status": c.status.value} for c in result.conflicts]}
 
     def act(self, name: str, rule_id: str, body: dict) -> dict:
         """approve / unapprove / remove / edit one rule."""
@@ -87,7 +90,10 @@ class Api:
             if repo.get(rule_id) is None:
                 raise ApiError(404, f"no rule {rule_id}")
             if action == "approve":
-                repo.set_status([rule_id], Status.ACTIVE)
+                try:
+                    repo.set_status([rule_id], Status.ACTIVE)
+                except ValueError as e:
+                    raise ApiError(400, str(e))
             elif action == "unapprove":
                 repo.set_status([rule_id], Status.PENDING)
             elif action == "remove":

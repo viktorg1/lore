@@ -27,7 +27,8 @@ def locate(paths: list[str]) -> tuple[Project | None, list[str]]:
         project = projects.find_for_path(absolute(p))
         if project:
             root = str(project.root)
-            return project, [os.path.relpath(a, root).replace(os.sep, "/") if a.startswith(root) else q.lstrip("/")
+            inside = lambda a: a == root or a.startswith(root + os.sep)   # "/work/app2" is not inside "/work/app"
+            return project, [os.path.relpath(a, root).replace(os.sep, "/") if inside(a) else q.lstrip("/")
                              for q in paths for a in [absolute(q)]]
     # relative paths with an unrelated cwd: accept a project only if exactly one contains them
     candidates = [pr for pr in projects.all_projects()
@@ -41,7 +42,11 @@ def get_rules(args: dict) -> str:
     project, rels = locate(args.get("paths") or [])
     if not project:
         return "No lore project matches these paths (run memorize.py --path <project> to register one). Proceed normally."
-    res = resolver.resolve(project.name, rels, int(args.get("max_tokens") or resolver.DEFAULT_MAX_TOKENS))
+    try:
+        asked = int(args.get("max_tokens") or resolver.DEFAULT_MAX_TOKENS)
+    except (TypeError, ValueError):
+        asked = resolver.DEFAULT_MAX_TOKENS
+    res = resolver.resolve(project.name, rels, max(100, min(asked, resolver.MAX_TOKENS_CEILING)))
     try:   # count what the agent actually received; bookkeeping must never break the answer
         UsageLog(project).record(r.id for r in res.rules)
     except OSError as e:
@@ -59,13 +64,18 @@ def record_feedback(args: dict) -> str:
         else:
             section = section_of(rels[0]) if rels else "root"
             scope = Scope.everywhere() if section == "root" else Scope.for_section(section)
-        rule, outcome = RuleRepository(project.name).add(
-            args["rule"], scope, Status.PENDING, source="feedback", evidence=args.get("evidence", ""))
+        result = RuleRepository(project.name).add(
+            str(args["rule"]), scope, Status.PENDING, source="feedback", evidence=str(args.get("evidence", "")))
     except (ValueError, KeyError) as e:
         return f"Not saved: {e}"
-    if outcome.value == "duplicate":
+    rule = result.rule
+    if result.outcome.value == "duplicate":
         return f"Already known (rule {rule.id}, status {rule.status}); no change."
-    return f"Saved as pending rule {rule.id} ({scope.key}). The user approves it with review.py."
+    note = ""
+    if result.conflicts:
+        other = result.conflicts[0]
+        note = f" It may contradict rule {other.id} ({other.status}): {other.text!r}. Tell the user so they can decide."
+    return f"Saved as pending rule {rule.id} ({scope.key}). The user approves it with review.py.{note}"
 
 
 MAX_REPORT_CHARS = 8000

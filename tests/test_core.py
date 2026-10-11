@@ -97,6 +97,9 @@ class TestRule(unittest.TestCase):
         self.assertNotEqual(a, Rule.make_id("never use any", Scope.for_section("src")))
 
 
+U1, U2, U3 = (f"https://github.com/o/r/pull/{n}#discussion_r{n}" for n in (1, 2, 3))
+
+
 class TestRepository(RegisteredProject):
     def test_add_dedupe_and_promote(self):
         first = self.repo.add("Never use any in TypeScript", Scope.everywhere(), Status.PENDING)
@@ -108,12 +111,16 @@ class TestRepository(RegisteredProject):
         self.assertEqual(third.outcome, Outcome.DUPLICATE)
         self.assertEqual(self.repo.get(first.rule.id).hits, 2)
 
+    def test_refs_must_be_web_links(self):
+        r = self.repo.add("Use the repository layer for DB access", Scope.everywhere(), refs=["javascript:alert(1)", "u1", U1])
+        self.assertEqual(self.repo.get(r.rule.id).refs, [U1])
+
     def test_refs_are_stored_deduped_and_merged_into_duplicates(self):
-        first = self.repo.add("Use the repository layer for DB access", Scope.everywhere(), refs=["u1", "u2", "u1"])
-        self.assertEqual(self.repo.get(first.rule.id).refs, ["u1", "u2"])
-        again = self.repo.add("use the repository layer for DB access.", Scope.everywhere(), refs=["u2", "u3"])
-        self.assertEqual((again.outcome, again.rule.refs), (Outcome.DUPLICATE, ["u1", "u2", "u3"]))
-        self.assertEqual(self.repo.get(first.rule.id).refs, ["u1", "u2", "u3"])
+        first = self.repo.add("Use the repository layer for DB access", Scope.everywhere(), refs=[U1, U2, U1])
+        self.assertEqual(self.repo.get(first.rule.id).refs, [U1, U2])
+        again = self.repo.add("use the repository layer for DB access.", Scope.everywhere(), refs=[U2, U3])
+        self.assertEqual((again.outcome, again.rule.refs), (Outcome.DUPLICATE, [U1, U2, U3]))
+        self.assertEqual(self.repo.get(first.rule.id).refs, [U1, U2, U3])
 
     def test_same_wording_in_another_scope_is_a_different_rule(self):
         self.repo.add("Keep functions short", Scope.everywhere())
@@ -226,7 +233,7 @@ class TestResolver(RegisteredProject):
         res = resolver.resolve("app", ["README.md"], max_tokens=60)
         self.assertGreater(res.omitted, 0)
         self.assertLess(len(res.rules), len(texts))
-        self.assertIn("more rules omitted", res.text)
+        self.assertIn("more applicable rules left out", res.text)
 
 
 class TestExport(RegisteredProject):

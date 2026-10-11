@@ -37,7 +37,7 @@ def print_candidates(candidates: list[discovery.Candidate]) -> None:
 def save_candidates(project: Project, candidates: list[discovery.Candidate], status: Status) -> TrainStats:
     repo, stats = RuleRepository(project.name), TrainStats()
     for c in candidates:
-        stats.count(repo.add(c.text, c.scope, status, source="discover", evidence=c.evidence).outcome)
+        stats.add(repo, c.text, c.scope, status, "discover", c.evidence)
     return stats
 
 
@@ -69,5 +69,7 @@ def main(argv=None) -> int:
     status = Status.ACTIVE if args.activate else Status.PENDING
     stats = save_candidates(project, candidates, status)
     print(f"\nSaved {stats.added} new {status} rule(s); {stats.duplicate} already known.")
+    for line in stats.problems():
+        print(line)
     print(f"Next: review.py --name {args.name} list --status pending")
     return 0
