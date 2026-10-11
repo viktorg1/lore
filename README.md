@@ -118,7 +118,10 @@ pending rules with links back to the comments. Reject one and it stays rejected.
 The detailed guide has every command, option, troubleshooting tips and the repo layout:
 **[README-overly-explained.md](README-overly-explained.md)**.
 
-Run the tests with `python3 -m unittest discover -s tests`.
+## Contributing
+
+Contributions are welcome, and adding a convention marker for your favourite language is a great first one.
+See [CONTRIBUTING.md](CONTRIBUTING.md). Run the tests with `python3 -m unittest discover -s tests`.
 
 ## License
 

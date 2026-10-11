@@ -63,7 +63,7 @@ class Handler(BaseHTTPRequestHandler):
     # ----- checks -----
     def _allowed_hosts(self) -> set[str]:
         port = self.server.server_address[1]
-        return {f"127.0.0.1:{port}", f"localhost:{port}"}
+        return {f"127.0.0.1:{port}"}
 
     def _guard(self, api: bool) -> bool:
         """DNS-rebinding and CSRF defence. Returns False (after replying) when the request must stop."""

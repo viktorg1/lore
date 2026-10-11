@@ -307,7 +307,7 @@ class TestHttp(RegisteredProject):
         self.assertEqual(self.call("GET", "/api/projects", host="evil.example:80")[0], 403)
         self.assertEqual(self.call("GET", "/", token=None, host="evil.example")[0], 403)
         self.assertEqual(self.call("GET", "/api/projects", origin="http://evil.example")[0], 403)
-        self.assertEqual(self.call("GET", "/api/projects", host=f"localhost:{self.port}")[0], 200)
+        self.assertEqual(self.call("GET", "/api/projects", host=f"localhost:{self.port}")[0], 403)   # only the IP is accepted
         status, _, _ = self.call("POST", f"/api/projects/app/rules/{self.pending.id}", {"action": "remove"}, origin="http://evil.example")
         self.assertEqual(status, 403)
         self.assertEqual(len(self.repo.all()), 2)
