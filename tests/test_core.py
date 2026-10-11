@@ -11,6 +11,7 @@ from core.globs import glob_match, split_globs
 from core.mapper import section_of
 from core.models import Level, Outcome, Rule, Scope, ScopeKind, Status
 from core.trainer import TrainStats
+from core.usage import Usage, UsageLog
 
 
 class TestGlobs(unittest.TestCase):
@@ -149,6 +150,47 @@ class TestRepository(RegisteredProject):
         self.assertEqual(data["version"], 1)
         self.assertEqual(data["rules"][1]["scope"], {"type": "section", "value": "src"})
         self.assertEqual(data["rules"][0]["status"], "pending")
+
+
+class TestUsage(RegisteredProject):
+    def test_counts_accumulate_and_a_rule_counts_once_per_call(self):
+        log = UsageLog("app")
+        self.assertEqual(log.get(self.active.id), Usage())
+        log.record([self.active.id, self.active.id, self.pending.id], when="2026-01-01T10:00:00")
+        log.record([self.active.id], when="2026-01-02T10:00:00")
+        self.assertEqual(log.get(self.active.id), Usage(2, "2026-01-02T10:00:00"))
+        self.assertEqual(log.get(self.pending.id), Usage(1, "2026-01-01T10:00:00"))
+
+    def test_the_stored_format_and_that_empty_calls_write_nothing(self):
+        UsageLog("app").record([])
+        self.assertFalse((self.home / "app" / "usage.json").exists())
+        UsageLog("app").record([self.active.id], when="t")
+        self.assertEqual(json.loads((self.home / "app" / "usage.json").read_text()),
+                         {"version": 1, "rules": {self.active.id: {"served": 1, "last_served": "t"}}})
+
+    def test_usage_lives_apart_from_the_rules(self):
+        before = (self.home / "app" / "rules.json").read_text()
+        UsageLog("app").record([self.active.id])
+        self.assertEqual((self.home / "app" / "rules.json").read_text(), before)   # counting never rewrites rules.json
+        self.repo.edit(self.active.id, "Name modules in snake_case")
+        self.assertEqual(UsageLog("app").get(self.active.id).served, 1)            # editing keeps the id, so the history
+
+    def test_deleting_a_rule_forgets_its_usage(self):
+        UsageLog("app").record([self.active.id, self.pending.id])
+        self.repo.remove([self.active.id])
+        self.assertEqual(set(UsageLog("app").all()), {self.pending.id})
+
+    def test_a_damaged_file_costs_counters_not_rules(self):
+        path = self.home / "app" / "usage.json"
+        for junk in ("{broken", "[]", '{"rules": 5}', '{"rules": {"a": "x", "b": {"served": "n"}, "c": {"served": 2}}}'):
+            path.write_text(junk)
+            self.assertIsInstance(UsageLog("app").all(), dict, junk)
+        path.write_text('{"rules": {"a": "x", "c": {"served": 2}}}')
+        self.assertEqual(UsageLog("app").all(), {"c": Usage(2, "")})                  # good entries survive bad neighbours
+        path.write_text("{broken")
+        UsageLog("app").record([self.active.id])                                    # recovers by starting fresh
+        self.assertEqual(UsageLog("app").get(self.active.id).served, 1)
+        self.assertEqual(len(self.repo.all()), 2)
 
 
 class TestResolver(RegisteredProject):

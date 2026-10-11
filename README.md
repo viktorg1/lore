@@ -34,7 +34,9 @@ Memory lives in `~/.lore/<name>/` (override the base folder with `LORE_HOME`):
 ```
 project.json   name + project root
 map.json       sections, languages, manifests (no file contents)
-rules.json     all rules: id, text, scope, status, source, evidence
+rules.json     all rules: id, text, scope, status, source, evidence, links to their source
+usage.json     how often each approved rule was handed to an agent, and when last (written by the MCP server)
+review-ledger.json   review comments already proposed by learn.py (so a rejected proposal stays rejected)
 ```
 
 ## Install
@@ -338,7 +340,16 @@ python3 review.py --name myapp reject 9c0d1e2f                # deletes the rule
 python3 review.py --name myapp edit 1a2b3c4d --text "Wrap SDK calls in an adapter" --scope section:src/api
 python3 review.py --name myapp add "Wrap SDK calls in an adapter" --scope section:src/api
 python3 review.py --name myapp resolve src/api/users.py       # exactly what the agent is told
+python3 review.py --name myapp usage                          # which approved rules the agent actually receives
 ```
+
+**Which rules does the agent actually get?** Every time the agent calls `get_rules` through the MCP server, lore counts one
+delivery for each rule it handed over (rules that did not fit the token budget are not counted). `review.py usage`
+lists your approved rules least-used first, and the web UI shows "served 12× · last 2026-10-10" or "never served" on each
+approved rule. Previews (`review.py resolve`, the UI's "What will the agent see?") never count, and the counters live in
+`usage.json`, apart from your rules, so counting can never overwrite an edit. Read the numbers with care: "never served"
+only means no file the agent worked on matched that rule *yet*. Give a rule weeks of real use before you call it dead
+weight; the counters are the evidence for a later cleanup, not a verdict.
 
 Learning from code review: when a reviewer comments, tell Copilot the correction in chat (it records a pending
 rule), or add it directly with `review.py add`. Approve weekly; reject vague ones.
@@ -427,6 +438,7 @@ core/                    the domain; knows nothing about the command line, HTTP 
   models.py                Scope, Rule, Status: typed objects for what is stored as JSON
   repository.py            RuleRepository: read/add/edit/approve/remove rules, with dedupe
   resolver.py              which rules apply to which files, within a token budget
+  usage.py                 UsageLog: how often each rule was handed to an agent (usage.json)
   export.py                write rules as Copilot instruction files
   trainer.py               turn instruction documents into rules
   mapper.py, globs.py, textutil.py   project structure map, glob matching, text helpers

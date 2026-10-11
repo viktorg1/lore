@@ -6,6 +6,7 @@ from unittest import mock
 from support import RegisteredProject, api_comment, run_script  # noqa: F401
 
 from core.models import Scope, Status
+from core.usage import Usage, UsageLog
 from mcpserver.protocol import McpServer, Tool
 from mcpserver.tools import create_server, locate
 
@@ -49,6 +50,34 @@ class TestLoreTools(RegisteredProject):
         self.assertIn("Name files in snake_case", text)
         self.assertNotIn("Validate input at the boundary", text)         # still pending
         self.assertIn("No lore project", self.call("get_rules", paths=["/elsewhere/x.py"]))
+
+    def test_get_rules_counts_the_rules_it_hands_over(self):
+        f = str(self.root / "src" / "users.py")
+        self.call("get_rules", paths=[f])
+        self.call("get_rules", paths=[f])
+        usage = UsageLog("app").all()
+        self.assertEqual(usage[self.active.id].served, 2)
+        self.assertTrue(usage[self.active.id].last_served)
+        self.assertNotIn(self.pending.id, usage)                                 # pending rules are never handed over
+
+    def test_only_rules_that_fit_the_budget_count(self):
+        self.repo.add("Wrap third party SDK calls in an adapter module for every service", Scope.for_section("src"), Status.ACTIVE)
+        text = self.call("get_rules", paths=[str(self.root / "src" / "a.py")], max_tokens=30)
+        served = UsageLog("app").all()
+        self.assertEqual(len(served), text.count("\n- ["))                        # exactly the lines shown
+        self.assertLess(len(served), 2)
+
+    def test_nothing_is_counted_when_nothing_applies_or_no_project_matches(self):
+        self.call("get_rules", paths=[str(self.root / "README.md")])             # only the section rule exists, root file
+        self.call("get_rules", paths=["/elsewhere/x.py"])
+        self.assertFalse((self.home / "app" / "usage.json").exists())
+
+    def test_a_failing_usage_write_never_breaks_the_answer(self):
+        with mock.patch.object(UsageLog, "record", side_effect=OSError("disk full")), \
+                mock.patch("mcpserver.tools.log") as log:
+            text = self.call("get_rules", paths=[str(self.root / "src" / "users.py")])
+        self.assertIn("Name files in snake_case", text)
+        self.assertIn("could not record usage", log.call_args[0][0])
 
     def test_get_rules_when_nothing_applies(self):
         self.repo.remove([self.active.id])

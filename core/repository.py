@@ -5,6 +5,7 @@ from typing import NamedTuple
 
 from . import store, textutil
 from .models import Outcome, Rule, Scope, Status
+from .usage import UsageLog
 
 FORMAT_VERSION = 1
 
@@ -96,4 +97,5 @@ class RuleRepository:
         rules = self.all()
         gone = [r for r in rules if r.id in ids]
         self._save([r for r in rules if r.id not in ids])
+        UsageLog(self.project).forget(r.id for r in gone)
         return gone

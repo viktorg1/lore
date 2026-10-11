@@ -56,6 +56,8 @@
   .chip.ok { color: var(--ok); border-color: #4ade8055; }
   .chip.bad { color: var(--danger); border-color: #f8717155; }
   .evidence { overflow-wrap: anywhere; }
+  .usage { color: var(--muted); font-size: 12px; }
+  .usage.unused { font-style: italic; }
   .refs { display: inline-flex; gap: 8px; }
   .refs a { color: var(--accent); text-decoration: none; font-size: 12px; }
   .refs a:hover { text-decoration: underline; }
@@ -325,8 +327,17 @@ function card(r) {
         h("span", { class: "chip scope" }, r.scope),
         r.source ? h("span", { class: "chip" }, r.source) : null,
         r.evidence ? h("span", { class: "evidence" }, r.evidence) : null,
-        refLinks(r.refs))),
+        refLinks(r.refs),
+        usageNote(r))),
     h("div", { class: "actions" }, actions));
+}
+
+// How often the agent actually received an approved rule (counted by the MCP server's get_rules).
+function usageNote(r) {
+  if (r.status !== "active") return null;
+  return r.served
+    ? h("span", { class: "usage", title: `Last handed to an agent at ${r.last_served}` }, `served ${r.served}× · last ${r.last_served.slice(0, 10)}`)
+    : h("span", { class: "usage unused", title: "No agent has received this rule yet" }, "never served");
 }
 
 // Links to the source of a rule (PR review comments). Only https URLs become links; text is never HTML.

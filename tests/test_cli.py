@@ -6,6 +6,7 @@ from support import TempHome  # noqa: F401  (also sets sys.path)
 from core import projects
 from core.models import Scope, Status
 from core.repository import RuleRepository
+from core.usage import UsageLog
 
 
 class CliCase(TempHome):
@@ -121,6 +122,28 @@ class TestReview(CliCase):
             out = self.review("resolve", path).stdout
             self.assertIn("[section] Wrap SDK calls in an adapter", out)
         self.assertEqual(self.review("resolve", "README.md").stdout.strip(), "(no rules apply)")
+
+    def test_usage_lists_unused_rules_first_and_previews_do_not_count(self):
+        self.repo.set_status([self.a.id], Status.ACTIVE)
+        third = self.repo.add("Keep tests fast", Scope.everywhere(), Status.ACTIVE).rule
+        out = self.review("usage").stdout
+        self.assertIn("-- 3 approved rule(s); 3 never served", out)
+        self.assertIn("Nothing has been served yet", out)
+        self.review("resolve", "src/api/users.py")                                # a preview is not a delivery
+        self.assertIn("3 never served", self.review("usage").stdout)
+        UsageLog("demoproj").record([self.b.id], when="2026-01-01T09:00:00")
+        UsageLog("demoproj").record([self.a.id], when="2026-02-01T09:00:00")
+        rows = [line.split()[0] for line in self.review("usage").stdout.splitlines()[1:-1]]
+        self.assertEqual(rows, ["never", "1", "1"])                               # the unused rule first, then oldest use first
+        out = self.review("usage").stdout
+        self.assertLess(out.index(self.b.id), out.index(self.a.id))
+        self.assertIn(third.id, out.splitlines()[1])
+        self.assertIn("-- 3 approved rule(s); 1 never served", out)
+        self.assertNotIn("Nothing has been served", out)
+
+    def test_usage_with_no_approved_rules(self):
+        self.repo.remove([self.b.id])
+        self.assertIn("-- 0 approved rule(s); 0 never served", self.review("usage").stdout)
 
     def test_sync_writes_files_and_unknown_project_fails(self):
         out = self.review("sync")

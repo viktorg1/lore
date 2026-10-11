@@ -10,6 +10,7 @@ from core import projects, store
 from core.models import Rule, Scope, Status
 from core.projects import Project
 from core.repository import RuleRepository
+from core.usage import Usage, UsageLog
 from reviews.github import REPO_RE, parse_pr_numbers
 
 from .runner import Runner
@@ -18,9 +19,10 @@ from .validation import ApiError, number_field, text_field
 MAX_RESOLVE_PATHS = 20
 
 
-def rule_view(r: Rule) -> dict:
+def rule_view(r: Rule, usage: Usage = Usage()) -> dict:
     return {"id": r.id, "text": r.text, "scope": r.scope.key, "status": r.status.value,
-            "source": r.source, "evidence": r.evidence, "created": r.created, "refs": list(r.refs)}
+            "source": r.source, "evidence": r.evidence, "created": r.created, "refs": list(r.refs),
+            "served": usage.served, "last_served": usage.last_served}
 
 
 def parse_scope(spec: str) -> Scope:
@@ -57,8 +59,9 @@ class Api:
 
     def project_rules(self, name: str) -> dict:
         project = self._project(name)
+        usage = UsageLog(name).all()
         return {"name": name, "root": str(project.root), "sections": sorted(project.load_map()["sections"]),
-                "rules": [rule_view(r) for r in RuleRepository(name).all()]}
+                "rules": [rule_view(r, usage.get(r.id, Usage())) for r in RuleRepository(name).all()]}
 
     # ----- rules -----
     def add_rule(self, name: str, body: dict) -> dict:
@@ -74,7 +77,7 @@ class Api:
                 rule, outcome = RuleRepository(name).add(text, scope, status, source="ui")
         except ValueError as e:
             raise ApiError(400, str(e))
-        return {"rule": rule_view(rule), "outcome": outcome.value}
+        return {"rule": rule_view(rule, UsageLog(name).get(rule.id)), "outcome": outcome.value}
 
     def act(self, name: str, rule_id: str, body: dict) -> dict:
         """approve / unapprove / remove / edit one rule."""
@@ -100,7 +103,7 @@ class Api:
                     raise ApiError(400, str(e))
             else:
                 raise ApiError(400, f"unknown action {action!r}")
-            return rule_view(repo.get(rule_id))
+            return rule_view(repo.get(rule_id), UsageLog(name).get(rule_id))
 
     # ----- scripts -----
     def register(self, body: dict) -> dict:

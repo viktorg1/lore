@@ -5,6 +5,7 @@
     review.py --name P approve <id>... | --all
     review.py --name P reject <id>...          (rejected rules are deleted)
     review.py --name P edit <id> [--text "new wording"] [--scope section:api]
+    review.py --name P usage                   (which approved rules the agent actually receives; unused first)
     review.py --name P resolve src/api/users.py [more paths]   (what the agent would be told)
     review.py --name P sync                    (write .github/instructions/*.instructions.md)
 """
@@ -18,6 +19,7 @@ from core import export, resolver
 from core.models import Status
 from core.projects import Project
 from core.repository import RuleRepository
+from core.usage import Usage, UsageLog
 
 from .common import CliError, entry, load_project, make_parser, parse_scope
 
@@ -34,6 +36,7 @@ def build_parser():
     p = sub.add_parser("edit"); p.add_argument("id"); p.add_argument("--text"); p.add_argument("--scope")
     p = sub.add_parser("resolve"); p.add_argument("paths", nargs="+")
     p.add_argument("--max-tokens", type=int, default=resolver.DEFAULT_MAX_TOKENS)
+    sub.add_parser("usage")
     sub.add_parser("sync")
     return ap
 
@@ -108,6 +111,23 @@ def cmd_resolve(project: Project, args) -> int:
     return 0
 
 
+def cmd_usage(project: Project, args) -> int:
+    """Approved rules, least used first: never served, then longest since last served."""
+    usage = UsageLog(project.name).all()
+    rules = RuleRepository(project.name).with_status(Status.ACTIVE)
+    rules.sort(key=lambda r: (usage.get(r.id, Usage()).served > 0, usage.get(r.id, Usage()).last_served, r.created))
+    print(f"{'served':<7} {'last served':<19} {'id':<8}  {'scope':<24} rule")
+    for r in rules:
+        u = usage.get(r.id, Usage())
+        print(f"{u.served or 'never':<7} {u.last_served or '-':<19} {r.id:<8}  {r.scope.key:<24} {r.text}")
+    unused = sum(1 for r in rules if usage.get(r.id, Usage()).served == 0)
+    print(f"-- {len(rules)} approved rule(s); {unused} never served")
+    if rules and unused == len(rules):
+        print("Nothing has been served yet: this counts what an agent receives through the MCP server's get_rules "
+              "(not previews such as `review.py resolve`).")
+    return 0
+
+
 def cmd_sync(project: Project, args) -> int:
     result = export.sync_copilot(project)
     if result.skipped:
@@ -117,7 +137,7 @@ def cmd_sync(project: Project, args) -> int:
 
 
 COMMANDS = {"list": cmd_list, "add": cmd_add, "approve": cmd_approve, "reject": cmd_reject,
-            "edit": cmd_edit, "resolve": cmd_resolve, "sync": cmd_sync}
+            "edit": cmd_edit, "resolve": cmd_resolve, "usage": cmd_usage, "sync": cmd_sync}
 
 
 @entry

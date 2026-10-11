@@ -8,9 +8,10 @@ from core.mapper import section_of
 from core.models import Scope, Status
 from core.projects import Project
 from core.repository import RuleRepository
+from core.usage import UsageLog
 from reviews import AGENT_HINTS, GhError, LearnOptions, learn, parse_pr_numbers
 
-from .protocol import McpServer, Tool
+from .protocol import McpServer, Tool, log
 
 VERSION = "0.1.0"
 
@@ -41,6 +42,10 @@ def get_rules(args: dict) -> str:
     if not project:
         return "No lore project matches these paths (run memorize.py --path <project> to register one). Proceed normally."
     res = resolver.resolve(project.name, rels, int(args.get("max_tokens") or resolver.DEFAULT_MAX_TOKENS))
+    try:   # count what the agent actually received; bookkeeping must never break the answer
+        UsageLog(project).record(r.id for r in res.rules)
+    except OSError as e:
+        log("could not record usage:", e)
     return res.text or f"No rules apply to {', '.join(res.sections)} in `{project.name}` yet."
 
 

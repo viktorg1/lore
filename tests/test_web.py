@@ -8,6 +8,7 @@ from support import RegisteredProject  # noqa: F401  (also sets sys.path)
 
 from core.models import Status
 from core.repository import RuleRepository
+from core.usage import UsageLog
 from web import server as web_server
 from web.api import Api
 from web.runner import MAX_OUTPUT, Runner
@@ -49,8 +50,17 @@ class TestApi(RegisteredProject):
         self.assertEqual(data["sections"], ["src", "tests"])
         self.assertEqual({r["status"] for r in data["rules"]}, {"active", "pending"})
         self.assertEqual(data["rules"][0]["evidence"], "12/12 files")
-        self.assertEqual(set(data["rules"][0]), {"id", "text", "scope", "status", "source", "evidence", "created", "refs"})
+        self.assertEqual(set(data["rules"][0]), {"id", "text", "scope", "status", "source", "evidence", "created", "refs",
+                                                  "served", "last_served"})
         self.assertEqual(data["rules"][0]["refs"], [])
+
+    def test_views_carry_usage(self):
+        UsageLog("app").record([self.active.id], when="2026-03-04T05:06:07")
+        by_id = {r["id"]: r for r in self.api.project_rules("app")["rules"]}
+        self.assertEqual((by_id[self.active.id]["served"], by_id[self.active.id]["last_served"]), (1, "2026-03-04T05:06:07"))
+        self.assertEqual((by_id[self.pending.id]["served"], by_id[self.pending.id]["last_served"]), (0, ""))
+        edited = self.api.act("app", self.active.id, {"action": "edit", "text": "Name modules in snake_case", "scope": "section:src"})
+        self.assertEqual(edited["served"], 1)
 
     def test_actions(self):
         rid = self.pending.id
@@ -149,6 +159,7 @@ class TestScripts(RegisteredProject):
         self.repo.set_status([trained.id], Status.ACTIVE)
         shown = self.tool("resolve", paths=["src/api/m1.py"])
         self.assertTrue(shown["ok"])
+        self.assertEqual(UsageLog("app").all(), {})                       # previews never count as the agent receiving a rule
         self.assertIn("Prefer small pure functions", shown["output"])
 
         synced = self.tool("sync")
