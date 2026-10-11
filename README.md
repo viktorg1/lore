@@ -1,251 +1,76 @@
-# Lore
+<p align="center">
+  <img src="assets/logo.svg" width="120" alt="Lore logo">
+</p>
 
-Project-scoped rule memory for coding agents. Built for GitHub Copilot (VS Code and Copilot CLI); any MCP client works.
+<h1 align="center">Lore</h1>
 
-You register a project once, give the tool your standards, the conventions it can infer from your code, and the
-feedback you get in code review, and the agent is handed **only the rules that apply to the files it is about to
-edit** — before it writes code. No orchestrator, no background LLM calls: lookups are plain Python, so the token cost
-is a handful of lines per request.
+<p align="center">
+  <b>Your coding rules, remembered per project and handed to your AI agent right before it edits. </b><br>
+   Local. No dependencies. No extra LLM calls.
+</p>
 
-It does not train model weights. It is retrieval memory: inspectable, editable, and effective the moment a rule is saved.
+<p align="center">
+  <img alt="Python 3.10+" src="https://img.shields.io/badge/python-3.10%2B-6b5fd6">
+  <img alt="Dependencies: none" src="https://img.shields.io/badge/dependencies-none-2ea44f">
+  <img alt="MCP" src="https://img.shields.io/badge/MCP-ready-ff9e5e">
+  <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue">
+</p>
+
+---
+
+## Why
+
+Agents forget your standards and repeat the mistakes you already corrected. Long instruction files fix that badly:
+they are noisy, they go stale, and the model skims them.
+
+Lore keeps a small set of **rules per project** and gives the agent **only the ones that apply to the files it is
+about to change**. You stay in control: nothing the tool guesses takes effect until you approve it.
+
+> Lore is retrieval memory, not model training. Rules are plain JSON you can read, edit and delete.
 
 ## How it works
 
 ```
-memorize.py   maps the project (sections, languages)             -> ~/.lore/<name>/map.json
-train.py      turns your instruction docs into scoped rules      -> rules.json
-discover.py   infers rules from the code and tooling config      -> rules.json (pending)
-learn.py      turns recurring PR review comments into rules      -> rules.json (pending)
-mcp_server.py gives the agent three tools:
-                get_rules(paths)        call before editing  -> the rules for those files
-                record_feedback(rule)   call after you correct it -> a PENDING rule
-                learn_from_reviews()    on request: recurring PR review comments -> PENDING proposals
-review.py     you approve / reject / edit / add rules, preview what the agent sees, export to Copilot files
-serve.py      a local web page for all of the above: add projects and rules, review, run every script
+ your docs ──┐
+ your code ──┼──▶  rules (pending / active)  ──▶  you review  ──▶  agent calls get_rules(paths)
+ PR reviews ─┘                                                      before it edits
 ```
 
-A rule has a **scope**: `global`, `section:<name>` (a folder-level area such as `src/api`), or
-`glob:<pattern>` (e.g. `**/*.{ts,tsx}`). More specific rules are listed first and win the token budget.
-Rules you add yourself or train from your own documents (`train.py`) are active immediately; rules from
-`discover.py`, `learn.py`, the agent's `record_feedback`, and instruction files imported by `memorize.py` start as
-**pending** and have no effect until you approve them.
+| Where rules come from | Command | Starts as |
+| --- | --- | --- |
+| Rules you write, or your own docs | `train.py`, `review.py add` | active |
+| Conventions inferred from the code | `discover.py` | pending |
+| Recurring PR review comments | `learn.py` | pending |
+| Corrections you give the agent | `record_feedback` (MCP) | pending |
+| Existing instruction files | `memorize.py` | pending |
 
-Memory lives in `~/.lore/<name>/` (override the base folder with `LORE_HOME`):
-
-```
-project.json   name + project root
-map.json       sections, languages, manifests (no file contents)
-rules.json     all rules: id, text, scope, status, source, evidence, links to their source
-usage.json     how often each approved rule was handed to an agent, and when last (written by the MCP server)
-review-ledger.json   review comments already proposed by learn.py (so a rejected proposal stays rejected)
-```
-
-## Install
-
-Requires Python 3.10+. No dependencies.
-
-```bash
-git clone <this repo> ~/projects/lore
-cd ~/projects/lore
-python3 -m unittest discover -s tests     # optional sanity check
-```
+Each rule has a scope: `global`, a folder-level `section`, or a `glob` like `**/*.{ts,tsx}`.
+The most specific rules come first.
 
 ## Quick start
 
-```bash
-python3 memorize.py --path ~/projects/myapp          # 1. register the project
-python3 discover.py --name myapp --save              # 2. infer rules from the code (pending)
-python3 review.py --name myapp list --status pending # 3. read them
-python3 review.py --name myapp approve --all         #    keep the ones you want (or approve by id)
-```
-
-Prefer a UI? `python3 serve.py` does all of this in the browser, including registering the project and running discovery ([details](#4b-in-the-browser)).
-
-Then connect your agent ([VS Code](#3a-connect-copilot-vs-code) or [Copilot CLI](#3b-connect-copilot-cli)).
-
-## 1. Register a project
+Requires Python 3.10+.
 
 ```bash
-python3 memorize.py --path ~/projects/myapp
-python3 memorize.py --path ~/projects/myapp --name app     # custom name
+git clone <this repo> ~/projects/lore && cd ~/projects/lore
+
+python3 memorize.py --path ~/projects/myapp           # register a project
+python3 discover.py --name myapp --save               # infer rules from its code
+python3 review.py --name myapp list --status pending  # read them
+python3 review.py --name myapp approve --all          # keep what you agree with
 ```
 
-`--path` is required. `--name` defaults to the last component of the path (`myapp`); it may contain letters, digits,
-`.`, `_` and `-`. A name already used by a different folder is refused. Re-run it any time the folder structure
-changes; it is fast and keeps your rules.
+Prefer a browser? Run `python3 serve.py` and do all of it from a dark, simple UI.
 
-It also imports instruction files the project already has (`.github/copilot-instructions.md`,
-`.github/instructions/`, `AGENTS.md`, `CLAUDE.md`, `.cursorrules`, `.cursor/rules`, `.windsurfrules`) unless you
-pass `--no-import`. They arrive as **pending** rules, because text that already sits in a repository is not the same as
-a rule you have chosen (use `--import-active` to activate them at once). Files generated by `review.py sync` are never
-imported.
+<p align="center">
+  <img width="900" alt="Lore web UI" src="https://github.com/user-attachments/assets/6ad8b77a-cb79-4998-af07-07036a223f93" />
+</p>
 
-## 2. Add rules
+## Connect your agent
 
-### 2a. Train on existing instructions
+Lore is an MCP server with three tools: `get_rules`, `record_feedback`, `learn_from_reviews`.
 
-```bash
-python3 train.py --name myapp --from ~/docs/team-standards
-python3 train.py --name myapp --from ./style.md --scope "glob:**/*.py"
-python3 train.py --name myapp --from ~/docs/team-standards --dry-run   # preview only
-python3 train.py --name myapp --from ~/docs/team-standards --pending   # review before they apply
-```
-
-`--from` takes a folder (searched recursively for `.md .mdx .mdc .txt .cursorrules`) or a single file.
-Each bullet becomes one rule. Scope is picked up from:
-
-1. `applyTo:` / `globs:` frontmatter → `glob` scope
-2. a heading that names exactly one project section ("## API layer" → `src/api`) → `section` scope
-3. otherwise `global`
-
-Re-running is safe: near-identical rules are not duplicated. Short, concrete bullets work best
-("Use the repository layer for DB access"); prose is split by paragraph. Status reports, checklists and changelogs
-also contain bullets — train on standards, not on everything in `docs/`.
-
-### 2b. No docs? Infer rules from the code
-
-```bash
-python3 discover.py --name myapp            # preview, saves nothing
-python3 discover.py --name myapp --save     # store as PENDING rules
-python3 discover.py --name myapp --save --activate
-```
-
-Reads the project and proposes rules from four kinds of evidence, each shown with its numbers:
-
-- **Tooling config** — manifests for PHP (`composer.json`), JS/TS (`package.json`, `tsconfig.json`), Python
-  (`requirements*.txt`, `pyproject.toml`), Go (`go.mod`), Rust (`Cargo.toml`), JVM (`pom.xml`, Gradle), .NET
-  (`*.csproj`), Ruby (`Gemfile`), Dart (`pubspec.yaml`), Elixir (`mix.exs`), Scala (`build.sbt`), C/C++
-  (`CMakeLists.txt`), `Makefile`/`justfile`, 20 linter/formatter configs (ESLint, Prettier, Biome, ruff,
-  golangci-lint, rustfmt, RuboCop, phpcs, PHPStan, ...) and `.editorconfig`. About 90 well-known frameworks and tools
-  are recognised (`DEPS` in `discovery/ecosystems.py`); runtime targets (PHP/Node/Python/Go/Rust/Java/.NET/Ruby
-  versions) become "target X" rules.
-- **Code statistics** — indentation, quote style, semicolons, line length, file-name casing per folder.
-- **Language markers** — 120 framework-independent conventions across 19 languages (PHP, JS, TS, Vue, Svelte, Python,
-  Go, Ruby, Java, Kotlin, C#, Rust, Scala, Dart, Elixir, Lua, Swift, C, C++): conventions of omission
-  ("97% of non-test files contain no `console.log` / `.unwrap()` / `print()` / bare `except:`") and style choices where
-  one side clearly dominates ("f-strings 95% vs `.format()`", "ES modules vs CommonJS", "interface vs type alias").
-- **Framework markers** — 81 markers, evaluated only when the project demonstrably uses the framework (manifest
-  dependency or source signature): Laravel, React, Express, Vue, SvelteKit, Angular, Django, Gin, Spring Boot, Ktor,
-  ASP.NET Core, Axum, Rails, Phoenix, Play, Flutter, LÖVE, SwiftUI and Qt. For example "Form Request classes vs inline
-  validation", "function vs class components", "constructor vs field injection", "Pinia vs Vuex".
-
-A convention is proposed only when it is lopsided (default 90% across at least 5 files; tune with
-`--min-ratio` / `--min-files`). Vendored and built files (`public/js`, `vendor`, minified code) are ignored.
-It reports what the code *does*, not what is *right*: review the pending list and reject habits you don't want
-enforced. Add your own markers with `--markers file.json` (see below).
-
-#### Teaching discovery a new convention
-
-Every convention is one small object. Pick the kind that fits and add it to the language or framework module:
-
-| Kind | Fires when | Example |
-|---|---|---|
-| `FileMarker` | ~every applicable file contains a pattern | every PHP file declares `strict_types` |
-| `OccurrenceMarker` | ~every occurrence of X is also Y | every function has a return type |
-| `AbsentMarker` | ~no non-test file contains a pattern | no `console.log` |
-| `ChoiceMarker` | one of several styles clearly dominates | function vs class components |
-
-```python
-# discovery/languages/python.py   (vanilla Python)
-AbsentMarker(id="py-assert", glob="**/*.py", bad=r"^\s*assert\b", rule="Raise exceptions instead of using assert in application code."),
-
-# discovery/frameworks/python.py   (only evaluated when Django is used)
-ChoiceMarker(id="django-urls", glob="**/urls.py", options=(
-    Option("path()", r"\bpath\(", "Declare URLs with path()."),
-    Option("re_path()", r"\bre_path\(", "Declare URLs with re_path()."))),
-```
-
-A new language is a new file in `languages/` that exports `LANGUAGE = Language(...)`; a new framework is a
-`Framework(name, languages, deps=..., signatures=..., markers=...)` in `frameworks/`. Both folders are scanned
-automatically. Marker ids must be unique (a test enforces it). Quick one-offs without touching the code:
-`discover.py --markers extra.json`, a JSON list where each object has `kind` = `file|occ|absent|choice` plus the
-marker's fields.
-
-### 2c. Learn from code review
-
-```bash
-python3 learn.py --name myapp                 # preview what reviewers keep repeating (last 90 days)
-python3 learn.py --name myapp --save          # store it as PENDING rules
-python3 learn.py --name myapp --pr 120 --pr 124-130 --min-repeats 2    # read exactly these pull requests
-python3 learn.py --name myapp --since 30 --min-repeats 2 --reviewer alice --repo owner/name
-```
-
-This closes the loop on feedback you get in pull requests. It reads the inline review comments of the project's
-GitHub repository through the GitHub CLI (`gh`, installed and logged in: `gh auth login`), groups comments that ask for the
-same thing, and proposes a rule for every theme that came up **at least 3 times on at least 2 different pull requests**.
-
-**Choosing the pull requests.** By default it reads the repository's recent review comments (`--since`, 90 days). To read
-specific pull requests instead, name them with `--pr`: a number, a list or a range, repeatable (`--pr 120 --pr 124-130`,
-`--pr 12,15,19`, at most 50). Those PRs are read in full and `--since` is ignored. A short list needs gentler thresholds, so
-with `--pr` the default for `--min-prs` drops to the number of PRs you named (at most 2); naming a single PR looks for
-themes repeated inside it. Pass `--min-repeats 2` if a few PRs are all you have. In the UI this is the "Pull requests" field.
-Each proposal is scoped to what the comments were about (a section if they were all in one, else one file extension,
-else everywhere), and keeps links to the comments it came from, shown on the rule in the UI.
-
-What it does and doesn't do:
-
-- **The wording is the reviewers', not a rule.** It picks the most representative comment and tidies it ("Please add a
-  return type here" → "Add a return type here."). Reword it with `review.py edit` or in the UI before approving.
-- **Grouping is by shared words**, with some normalisation (`db` = `database`, `UserRepository` = `user repository`,
-  `logger` = `logging`). Paraphrases that share few words can be missed; look at the preview and lower `--min-repeats`
-  if you suspect it. It is deterministic and offline apart from the `gh` call; no language model is involved.
-- **Only inline review comments** are used, not PR descriptions, general PR comments or review summaries. Replies in a
-  thread and bot comments are ignored (`--include-bots` to keep the bots).
-- **A rejected proposal stays rejected.** Every comment that was proposed is remembered per project
-  (`~/.lore/<name>/review-ledger.json`), so re-running only shows new themes. `--include-seen` ignores that memory.
-- It runs `gh` inside the project's folder, so it finds the repository from the git remote; `--repo` overrides that.
-
-## 3. Connect your agent
-
-Both Copilot clients use the same MCP server (`mcp_server.py`) and the same three tools. The project is detected from
-the file paths, so one registration serves every project you ran `memorize.py` on. Two things are needed in each
-client: the MCP server entry, and an instruction telling the model to call the tools.
-
-Use **absolute paths** to this repo below, and have the model pass absolute file paths to `get_rules`; relative
-paths are resolved against the server's working directory.
-
-Check that the server itself works before blaming a client:
-
-```bash
-printf '{"jsonrpc":"2.0","id":1,"method":"tools/list"}\n' | python3 mcp_server.py
-```
-
-### 3a. Connect Copilot (VS Code)
-
-Add the server to your **user** MCP configuration so it applies to every workspace (Command Palette →
-*MCP: Open User Configuration*):
-
-```json
-{
-  "servers": {
-    "lore": {
-      "type": "stdio",
-      "command": "python3",
-      "args": ["/home/YOU/projects/lore/mcp_server.py"]
-    }
-  }
-}
-```
-
-Then add this to a **user-level** instructions file (Command Palette → *Chat: New Instructions File* → User) so
-Copilot actually calls the tools:
-
-```markdown
----
-applyTo: "**"
----
-Before creating or editing any file, call the `get_rules` tool from the lore server with
-the absolute paths you are about to change, and follow the rules it returns. If a rule conflicts
-with the request, ask me. When I correct your code or state a standard you violated, call
-`record_feedback` with one short, general, imperative rule.
-```
-
-Menu names vary by VS Code version. Use agent mode — MCP tools are not available in plain completions.
-
-### 3b. Connect Copilot CLI
-
-Copilot CLI reads MCP servers from `~/.copilot/mcp-config.json`. Either add the server interactively (`/mcp add`,
-choose type **STDIO**, command `python3`, argument `/home/YOU/projects/lore/mcp_server.py`) or edit the file:
+**Copilot CLI** (`~/.copilot/mcp-config.json`):
 
 ```json
 {
@@ -254,208 +79,47 @@ choose type **STDIO**, command `python3`, argument `/home/YOU/projects/lore/mcp_
       "type": "local",
       "command": "python3",
       "args": ["/home/YOU/projects/lore/mcp_server.py"],
-      "env": {},
       "tools": ["*"]
     }
   }
 }
 ```
 
-If the file already has servers, add `lore` next to them instead of replacing the file. Note the differences
-from VS Code: the top-level key is `mcpServers` and the type is `local`.
+**VS Code**: add the same server to your user MCP configuration. Both setups are walked through in
+[the full guide](README-overly-explained.md#3-connect-your-agent).
 
-Verify the server is picked up (restart `copilot` after editing the file):
+Then tell the agent to use it (`~/.copilot/copilot-instructions.md`):
+
+```text
+Before creating or editing any file, call get_rules from the lore server with the absolute paths
+you are about to change, and follow the rules it returns. When I correct your code, call
+record_feedback with one short, general, imperative rule.
+```
+
+## Learn from code review
 
 ```bash
-copilot mcp list                    # lore should be listed
-copilot mcp get lore        # type, status and tools: get_rules, record_feedback, learn_from_reviews
+python3 learn.py --name myapp --pr 120-140 --save
 ```
 
-or, inside an interactive session, `/mcp show lore`.
+Reads inline review comments through the `gh` CLI, groups the ones that keep repeating, and proposes them as
+pending rules with links back to the comments. Reject one and it stays rejected.
 
-Then give the CLI the same instruction. A **user-level** file applies to every repository:
+## Safe by default
 
-```bash
-mkdir -p ~/.copilot
-cat >> ~/.copilot/copilot-instructions.md <<'EOF'
-Before creating or editing any file, call the `get_rules` tool from the lore server with
-the absolute paths you are about to change, and follow the rules it returns. If a rule conflicts
-with the request, ask me. When I correct your code or state a standard you violated, call
-`record_feedback` with one short, general, imperative rule.
-EOF
-```
+- **Pending until you approve.** Anything inferred or suggested has no effect until you say so.
+- **No hidden text.** Rules containing invisible Unicode, HTML comments or more than 500 characters are refused.
+- **Contradictions are flagged**, not silently merged ("use tabs" next to "use spaces").
+- **Small on purpose.** The agent gets at most 20 rules and 2,000 tokens per request.
+- **Everything is local** in `~/.lore` (set `LORE_HOME` to move it).
 
-(Alternatively put the same text, with the `applyTo: "**"` frontmatter shown above, in
-`~/.copilot/instructions/lore.instructions.md`.) Repository-level instructions — `.github/copilot-instructions.md`,
-`.github/instructions/*.instructions.md` and `AGENTS.md` — are also read by the CLI, so the static fallback below works
-there too. Per the GitHub docs these locations are current, but the CLI changes quickly; if a path stops working, check
-the "custom instructions" and "add MCP servers" pages of the Copilot CLI documentation.
+## Learn more
 
-Tool permission prompts: the CLI may ask before running an MCP tool. `get_rules` only reads; `record_feedback` and
-`learn_from_reviews` (with `save`) only write pending rules to `~/.lore/<name>/rules.json`.
+The detailed guide has every command, option, troubleshooting tips and the repo layout:
+**[README-overly-explained.md](README-overly-explained.md)**.
 
-#### Learning from code review inside Copilot
+Run the tests with `python3 -m unittest discover -s tests`.
 
-The MCP server also exposes `learn_from_reviews`, so you can simply ask for it in a session: *"use lore to learn from
-the review comments on PRs 120 and 124-130"*. With no `save` it only previews; with `save` it stores **pending** rules
-(never active) for you to reword and approve. It reads only the project's own repository (the tool has no `repo`
-argument), and it labels the quoted review comments as data so the agent does not follow instructions written in them.
+## License
 
-### 3c. No MCP? Static fallback
-
-```bash
-python3 review.py --name myapp sync
-```
-
-writes approved (active) rules to `<project>/.github/instructions/lore-*.instructions.md` with matching
-`applyTo` globs. Copilot (VS Code and CLI) loads them natively. These files are marked as generated, are rewritten on
-every `sync`, stale ones are removed, and they are never re-imported as rules. Editing them by hand is pointless; edit
-the rules instead. Note this writes into the project repo, so you may or may not want to commit them. Section-scoped
-rules need the section to exist in the map — re-run `memorize.py` first if you added folders.
-
-## 4. Review what it learned
-
-### 4a. In the terminal
-
-```bash
-python3 review.py --name myapp list --status pending
-python3 review.py --name myapp list --details                 # also where each rule came from (source, evidence, links)
-python3 review.py --name myapp approve 1a2b3c4d 5e6f7a8b      # or: approve --all
-python3 review.py --name myapp unapprove 1a2b3c4d             # back to pending
-python3 review.py --name myapp reject 9c0d1e2f                # deletes the rule
-python3 review.py --name myapp edit 1a2b3c4d --text "Wrap SDK calls in an adapter" --scope section:src/api
-python3 review.py --name myapp add "Wrap SDK calls in an adapter" --scope section:src/api
-python3 review.py --name myapp resolve src/api/users.py       # exactly what the agent is told
-python3 review.py --name myapp usage                          # which approved rules the agent actually receives
-```
-
-**Which rules does the agent actually get?** Every time the agent calls `get_rules` through the MCP server, lore counts one
-delivery for each rule it handed over (rules that did not fit the token budget are not counted). `review.py usage`
-lists your approved rules least-used first, and the web UI shows "served 12× · last 2026-10-10" or "never served" on each
-approved rule. Previews (`review.py resolve`, the UI's "What will the agent see?") never count, and the counters live in
-`usage.json`, apart from your rules, so counting can never overwrite an edit. Read the numbers with care: "never served"
-only means no file the agent worked on matched that rule *yet*. Give a rule weeks of real use before you call it dead
-weight; the counters are the evidence for a later cleanup, not a verdict.
-
-Learning from code review: when a reviewer comments, tell Copilot the correction in chat (it records a pending
-rule), or add it directly with `review.py add`. Approve weekly; reject vague ones.
-
-### 4b. In the browser
-
-```bash
-python3 serve.py             # prints http://127.0.0.1:8765/?t=<token> and opens it
-python3 serve.py --port 9000 --no-open
-```
-<img width="1920" height="999" alt="image" src="https://github.com/user-attachments/assets/6ad8b77a-cb79-4998-af07-07036a223f93" />
-
-A dark, single-page UI. Projects are listed on the left (a badge shows how many rules wait for review), with
-**+ Add project** at the bottom. Picking a project shows three tabs:
-
-- **Pending** and **Approved**: the rules. Approve, edit (text and scope, with section names suggested), unapprove or
-  delete each one; **+ Add rule** creates a new rule (as approved or pending). "Approve all", delete and the bulk
-  actions below ask for a second click, and disarm by themselves after a few seconds. The filter box searches rule
-  text, scope and source.
-- **Tools**: every script, with its output shown on the page (the exact command, exit status and time):
-
-  | Card | Runs |
-  |---|---|
-  | Discover conventions | `discover.py`: preview, save as pending, or save & approve; adjustable thresholds |
-  | Learn from PR reviews | `learn.py`: preview or save the themes reviewers repeat (needs `gh`) |
-  | Train on instruction files | `train.py`: folder or file, optional forced scope, pending and dry-run options |
-  | What will the agent see? | `review.py resolve`: the exact rules handed to the agent for the files you list |
-  | Project | `memorize.py` (re-map), `review.py sync` (write Copilot instruction files into the project) and a check that `mcp_server.py` answers the MCP handshake |
-
-**+ Add project** runs `memorize.py` for a folder you type (name optional) and opens the new project.
-
-It reads and writes the same files as the CLI, so both stay in sync. The page is read from disk on every request and
-sent with `Cache-Control: no-store`, so a reload always shows the current version; no restart is needed after
-editing `web/index.html`. (Changes to the Python code still need a restart.)
-
-It is meant to be run on your own machine, but note what it does. It can run lore's scripts on folders you name, so it
-listens on `127.0.0.1` only, every request needs the random token printed at startup (a new one each run), and requests
-with a foreign `Host` or `Origin` are refused, so a web page you happen to visit cannot read or change your rules or
-start scripts. The page can only run the fixed set of lore scripts above, with arguments passed as a list (never through
-a shell), one at a time, with a 120-second limit. Rule text and script output are always rendered as plain text,
-never as HTML. Stop it with Ctrl+C.
-
-## Troubleshooting
-
-| Symptom | Check |
-|---|---|
-| Agent never calls `get_rules` | The instruction file is missing or not loaded; ask the agent which tools it has. The call is requested, not enforced. |
-| "No lore project matches these paths" | Run `memorize.py --path <project>`; make sure the agent passes absolute paths inside that project. |
-| Rule saved but not applied | It is probably still `pending`; `review.py list --status pending`, then `approve`. |
-| `serve.py` page says "Open the address printed by serve.py" | You opened the bare URL; use the full link with `?t=<token>` from the terminal (the token changes every run). |
-| Section rule missing from `sync` output | The section is not in the map; re-run `memorize.py`. |
-| Server entry not listed in Copilot CLI | Wrong file/key: CLI uses `~/.copilot/mcp-config.json` with `mcpServers`/`"type": "local"`; VS Code uses `servers`/`"type": "stdio"`. |
-| `discover.py` proposes nothing | Fewer than 5 files of evidence, or no convention reaches 90%; try `--min-ratio 0.8`. |
-| The agent does not call `learn_from_reviews` | Ask for it by name ("use the lore learn_from_reviews tool for PRs 120-130"); check `copilot mcp get lore` lists it. |
-| `learn.py`: "gh is not installed" / "gh auth login" | Install the GitHub CLI and log in; `learn.py` uses your existing `gh` session and sends nothing else anywhere. |
-| `learn.py` finds comments but no themes | Needs 3+ similar comments on 2+ pull requests; try `--min-repeats 2`, a longer `--since`, or `--repo owner/name` if the git remote is not the repo you review. |
-| A proposal you rejected came back | Only with `--include-seen`, or after deleting the project's `review-ledger.json`. |
-
-## Limits
-
-- Rule text is checked before it is stored: hidden characters (zero-width, bidirectional controls, Unicode "tag"
-  characters, variation selectors), HTML comments and anything over 500 characters are refused with a message, not
-  silently cleaned, because text that looks different to a person and to a model is how rule files get poisoned. Rules
-  stored before this check that contain such characters are shown with `<U+XXXX>` markers and a warning, are never served
-  to an agent or exported, and cannot be approved until you edit or reject them. This is a safeguard, not a guarantee:
-  a visible instruction that is simply malicious still needs your judgement when you approve it.
-- A rule that reverses the meaning of a similar one ("use tabs" next to "use spaces", "do" next to "do not", "max 80"
-  next to "max 120") is added next to it with a warning instead of being merged into it. The check is a word heuristic;
-  it will miss subtle contradictions, so read your active rules together now and then.
-- The agent receives at most 20 rules and 2,000 tokens per `get_rules` call (800 tokens by default), most specific first;
-  when a rule does not fit, nothing more general is served in its place. The research on instruction files suggests a short,
-  specific set works better than a long one, and `review.py usage` tells you when you have more than the agent can receive.
-- The agent calls `get_rules` because your instruction tells it to. That is a request, not enforcement;
-  a model can skip it. Check with `review.py resolve` and look for the tool call in the chat.
-- Deterministic extraction cannot judge rule quality. Keep sources short and specific, and prune.
-- Discovery is regex-based and heuristic: markers can mis-fire on comments or strings and are only lightly tested
-  against real projects. Treat every proposed rule as a suggestion with evidence, not a fact.
-- `get_rules` returns at most ~800 tokens by default (`max_tokens`), most specific rules first.
-- Sections are derived from top-level folders (and one level under `src/`, `packages/`, `apps/`,
-  `services/`, `lib/`, ...). Unusual layouts may need `glob:` scopes instead.
-- Rules are stored in plain JSON on your machine; nothing is sent anywhere by this tool. (`learn.py` calls GitHub through
-  your own `gh` login to read review comments, and nothing else.)
-- Research on instruction files for coding agents is mixed: rules can help, but automatically generated context files
-  have not helped on average in at least one study, and more rules cost more tokens. Keep the approved set small and
-  prefer rules that say what *not* to do. Treat everything `discover.py` and `learn.py` propose as a draft for you to prune.
-
-## Layout of this repo
-
-```
-memorize.py  train.py  discover.py  learn.py  review.py  serve.py  mcp_server.py
-                         entry points: thin wrappers you run with python3 (their paths are stable, so
-                         MCP configs and docs can point at them)
-
-core/                    the domain; knows nothing about the command line, HTTP or MCP
-  store.py                 data folder (~/.lore), project-name rules, atomic JSON files
-  projects.py              Project and the registry of registered projects
-  models.py                Scope, Rule, Status: typed objects for what is stored as JSON
-  repository.py            RuleRepository: read/add/edit/approve/remove rules, with dedupe
-  resolver.py              which rules apply to which files, within a token budget
-  usage.py                 UsageLog: how often each rule was handed to an agent (usage.json)
-  export.py                write rules as Copilot instruction files
-  trainer.py               turn instruction documents into rules
-  mapper.py, globs.py, textutil.py   project structure map, glob matching, text helpers
-discovery/               infer rules from code (depends on core only)
-  codebase.py  detectors.py  markers.py  ecosystems.py  scanner.py  registry.py  models.py
-  languages/               one module per language (LANGUAGE + vanilla markers)
-  frameworks/              one module per language family (FRAMEWORKS)
-reviews/                 learn from code review (depends on core only)
-  github.py                read PR review comments through `gh`;  text.py, cluster.py  group and tidy them
-  service.py               the whole pipeline (fetch, group, save), shared by learn.py and the MCP tool
-  ledger.py                remembers which comments were already proposed;  models.py
-cli/                     the command-line commands (one module per script) + shared plumbing
-web/                     serve.py's implementation: server.py (HTTP + security), api.py, runner.py, index.html
-mcpserver/               mcp_server.py's implementation: protocol.py (generic MCP) and tools.py (lore's three tools)
-tests/                   python3 -m unittest discover -s tests   (one file per area; test_architecture.py enforces the layering)
-```
-
-The layers only depend downwards: `core` imports nothing of lore's own, `discovery` and `reviews` import `core`, and the
-interfaces (`cli`, `web`, `mcpserver`) import all three. To add a command, a tool or a web action, build it on `core`;
-to teach discovery a convention, add a marker (see above). A test fails if a lower layer imports a higher one.
-
-There is no install step and no package to install: the scripts find their sibling folders, so run them from anywhere by
-path (`python3 ~/projects/lore/memorize.py ...`).
+[MIT](LICENSE)

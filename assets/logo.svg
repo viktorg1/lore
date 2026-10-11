@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="Lore logo">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2a2358"/>
+      <stop offset="1" stop-color="#0f0d24"/>
+    </linearGradient>
+    <linearGradient id="glow" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffd98a"/>
+      <stop offset="1" stop-color="#ff9e5e"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="56" fill="url(#bg)"/>
+  <!-- open book -->
+  <path d="M128 92c-22-14-52-16-76-8v100c24-8 54-6 76 8z" fill="#e9e6ff"/>
+  <path d="M128 92c22-14 52-16 76-8v100c-24-8-54-6-76 8z" fill="#c9c3ff"/>
+  <path d="M128 92v100" stroke="#0f0d24" stroke-width="5" stroke-linecap="round"/>
+  <!-- rules as lines on the left page -->
+  <g stroke="#6b5fd6" stroke-width="6" stroke-linecap="round">
+    <path d="M68 112c14-3 28-2 46 4"/>
+    <path d="M68 134c14-3 28-2 46 4"/>
+    <path d="M68 156c14-3 28-2 34 1"/>
+  </g>
+  <!-- the spark: the one rule that applies -->
+  <path d="M166 36l7 24 24 7-24 7-7 24-7-24-24-7 24-7z" fill="url(#glow)"/>
+  <circle cx="204" cy="38" r="5" fill="#ffd98a"/>
+  <circle cx="132" cy="48" r="3.5" fill="#ffd98a" opacity=".8"/>
+</svg>
