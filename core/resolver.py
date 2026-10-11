@@ -3,12 +3,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from . import sanitize
 from .mapper import section_of
 from .models import Level, Rule, Status
 from .repository import RuleRepository
 
 DEFAULT_MAX_TOKENS = 800
 MAX_TOKENS_CEILING = 2000     # what a caller may ask for at most
+MAX_LABEL = 60                # longest folder name echoed back in the header
 MAX_RULES = 20                # rules per answer; beyond this a model follows fewer of them reliably
 
 
@@ -23,6 +25,15 @@ class Resolution:
 
 def _tokens(s: str) -> int:
     return max(1, len(s) // 4)
+
+
+def _label(section: str) -> str:
+    """A folder name made safe to echo to an agent: hidden characters and line breaks spelled out, length capped.
+
+    Folder names come from whatever repository is open, so they are untrusted text.
+    """
+    shown = sanitize.reveal("".join(f"<U+{ord(c):04X}>" if c in "\t\n\r" else c for c in section))
+    return shown if len(shown) <= MAX_LABEL else shown[:MAX_LABEL - 1] + "…"
 
 
 def resolve(project: str, rel_paths: list[str], max_tokens: int = DEFAULT_MAX_TOKENS,
@@ -44,7 +55,7 @@ def resolve(project: str, rel_paths: list[str], max_tokens: int = DEFAULT_MAX_TO
                 picked[rule.id] = (level, rule)
     ranked = sorted(picked.values(), key=lambda lr: (lr[0], lr[1].created))
 
-    sections = sorted({section_of(p) for p in rel_paths})
+    sections = sorted({_label(section_of(p)) for p in rel_paths})
     header = f"Rules for project `{project}` (follow before writing code; sections: {', '.join(sections) or '-'})"
     used, shown = _tokens(header), []
     for level, rule in ranked:

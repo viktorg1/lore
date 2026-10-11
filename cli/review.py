@@ -2,7 +2,7 @@
 
     review.py --name P list [--status pending|active] [--details]
     review.py --name P add "Use the repository layer for DB access" [--scope section:api] [--pending]
-    review.py --name P approve <id>... | --all
+    review.py --name P approve <id>... | --all [--yes]   (asks first; --all skips rules that look risky)
     review.py --name P unapprove <id>...       (back to pending)
     review.py --name P reject <id>...          (rejected rules are deleted)
     review.py --name P edit <id> [--text "new wording"] [--scope section:api]
@@ -34,6 +34,7 @@ def build_parser():
     p = sub.add_parser("add"); p.add_argument("text"); p.add_argument("--scope", default="global")
     p.add_argument("--pending", action="store_true")
     p = sub.add_parser("approve"); p.add_argument("ids", nargs="*"); p.add_argument("--all", action="store_true")
+    p.add_argument("-y", "--yes", action="store_true", help="do not ask for confirmation")
     p = sub.add_parser("unapprove"); p.add_argument("ids", nargs="+")
     p = sub.add_parser("reject"); p.add_argument("ids", nargs="+")
     p = sub.add_parser("edit"); p.add_argument("id"); p.add_argument("--text"); p.add_argument("--scope")
@@ -59,9 +60,12 @@ def _relative(root: Path, p: str) -> str:
 
 def cmd_list(project: Project, args) -> int:
     shown = [r for r in RuleRepository(project.name).all() if not args.status or r.status.value == args.status]
-    hidden = 0
+    hidden = risky = 0
     for r in shown:
         flag = f"  [!! {r.hidden} hidden character(s) shown as <U+XXXX>]" if r.hidden else ""
+        if r.risks:
+            flag += f"  [!! looks risky: {'; '.join(r.risks)}]"
+            risky += 1
         hidden += bool(r.hidden)
         print(f"{r.id}  {r.status.value:<7} {r.scope.key:<24} {sanitize.reveal(r.text)}{flag}")
         if args.details:
@@ -79,6 +83,9 @@ def cmd_list(project: Project, args) -> int:
     if hidden:
         print(f"warning: {hidden} rule(s) contain hidden characters; they are never served or exported, and cannot be "
               "approved until you edit or reject them.", file=sys.stderr)
+    if risky:
+        print(f"warning: {risky} rule(s) look like an attack on the agent rather than a convention. Read them "
+              "before approving; `approve --all` skips them.", file=sys.stderr)
     return 0
 
 
@@ -94,14 +101,44 @@ def cmd_add(project: Project, args) -> int:
     return 0
 
 
+def _confirm(question: str, args) -> bool:
+    """True after `--yes` or a typed yes. Reads one line from stdin, so a script that gives none is answered 'no'."""
+    if args.yes:
+        return True
+    print(question + " [y/N] ", end="", flush=True)
+    try:
+        return input().strip().lower() in ("y", "yes")
+    except EOFError:
+        print()
+        return False
+
+
+def _describe(r) -> str:
+    return f"  {r.id}  {r.scope.key:<22} {sanitize.reveal(r.text)}\n          from: {r.source or '-'}"
+
+
 def cmd_approve(project: Project, args) -> int:
-    repo, ids = RuleRepository(project.name), args.ids
+    repo = RuleRepository(project.name)
     if args.all:
         pending = repo.with_status(Status.PENDING)
-        ids = [r.id for r in pending if not r.hidden]
-        if len(ids) != len(pending):
-            print(f"warning: {len(pending) - len(ids)} pending rule(s) contain hidden characters and were not approved",
-                  file=sys.stderr)
+        safe = [r for r in pending if not r.hidden and not r.risks]
+        held = [r for r in pending if r not in safe]
+        if safe:
+            print(f"About to approve {len(safe)} pending rule(s). Once approved, the agent is told to follow them:")
+            print("\n".join(_describe(r) for r in safe))
+            if not _confirm(f"Approve these {len(safe)} rule(s)?", args):
+                raise CliError("nothing approved")
+        ids = [r.id for r in safe]
+        for r in held:
+            why = "hidden characters" if r.hidden else "; ".join(r.risks)
+            print(f"warning: not approved, {r.id}: {why}. Review it, then `approve {r.id}` on its own.", file=sys.stderr)
+    else:
+        ids = args.ids
+        for r in (repo.get(i) for i in ids):
+            if r and r.risks and not r.hidden:
+                print(f"{r.id} looks risky: {'; '.join(r.risks)}\n{_describe(r)}")
+                if not _confirm("Approve it anyway?", args):
+                    raise CliError("nothing approved")
     try:
         done = repo.set_status(ids, Status.ACTIVE)
     except ValueError as e:

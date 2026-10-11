@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum, IntEnum
 
-from . import sanitize, textutil
+from . import risk, sanitize, textutil
 from .globs import glob_match, split_globs
 from .mapper import section_of
 
@@ -144,6 +144,11 @@ class Rule:
     extra: dict = field(default_factory=dict)         # unknown keys from the file survive a load/save round-trip
 
     _KNOWN = ("id", "text", "scope", "status", "source", "evidence", "created", "hits", "edited", "refs")
+
+    @property
+    def risks(self) -> list[str]:
+        """Why this text looks like an attack on the agent rather than a convention (see core/risk.py)."""
+        return risk.check(self.text)
 
     @property
     def hidden(self) -> int:

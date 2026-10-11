@@ -289,9 +289,11 @@ function renderMain() {
   if (state.tab === "pending" && pending.length) {
     const key = "all";
     bar.push(h("button", { class: "btn primary", onclick: twoStep(key, async () => {
-      for (const r of visible()) await act(r, { action: "approve" });
+      for (const r of visible().filter((x) => !(x.risks && x.risks.length) && !x.hidden)) await act(r, { action: "approve" });
       await refresh();
-    }) }, state.sure === key ? `Really approve ${visible().length}?` : state.q.trim() ? "Approve shown" : "Approve all"));
+    }) }, state.sure === key ? `Really approve ${visible().filter(okToBulk).length}?` : state.q.trim() ? "Approve shown" : "Approve all"));
+    const skipped = visible().filter((x) => !okToBulk(x)).length;
+    if (skipped) bar.push(h("span", { class: "evidence", title: "Rules that look risky or hide characters are never approved in bulk." }, `${skipped} flagged, approve one by one`));
   }
   $("bar").replaceChildren(...bar);
   renderList(visible());
@@ -309,13 +311,18 @@ function renderList(rows) {
   $("list").replaceChildren(...kids);
 }
 
+const okToBulk = (r) => !(r.risks && r.risks.length) && !r.hidden;
+
 function card(r) {
   if (state.editing === r.id) return editor(r);
   const key = `rm:${r.id}`;
   const actions = [];
-  if (r.status === "pending") actions.push(h("button", { class: "btn primary", disabled: r.hidden > 0,
+  const apKey = `ap:${r.id}`, risky = r.risks && r.risks.length > 0;
+  if (r.status === "pending") actions.push(h("button", { class: "btn primary" + (risky && state.sure === apKey ? " sure" : ""), disabled: r.hidden > 0,
     title: r.hidden ? "This rule contains hidden characters: edit or reject it first" : null,
-    onclick: guard(async () => { await act(r, { action: "approve" }); await refresh(); }) }, "Approve"));
+    onclick: risky ? twoStep(apKey, async () => { await act(r, { action: "approve", confirm_risky: true }); await refresh(); })
+                   : guard(async () => { await act(r, { action: "approve" }); await refresh(); }) },
+    risky ? (state.sure === apKey ? "Approve anyway?" : "Review & approve") : "Approve"));
   actions.push(h("button", { class: "btn", onclick: () => { state.editing = r.id; state.adding = false; state.sure = null; renderMain(); } }, "Edit"));
   if (r.status === "active") actions.push(h("button", { class: "btn", onclick: guard(async () => { await act(r, { action: "unapprove" }); await refresh(); }) }, "Unapprove"));
   actions.push(h("button", { class: "btn danger" + (state.sure === key ? " sure" : ""),
@@ -329,6 +336,8 @@ function card(r) {
         h("span", { class: "chip scope" }, r.scope),
         r.hidden ? h("span", { class: "chip bad", title: "Hidden characters are shown as <U+XXXX>. This rule is never served to an agent or exported until you fix it." },
           `⚠ ${r.hidden} hidden character${r.hidden === 1 ? "" : "s"}`) : null,
+        risky ? h("span", { class: "chip bad", title: "This text looks like an instruction aimed at the agent rather than a coding convention. Read it carefully before approving." },
+          `⚠ looks risky: ${r.risks.join("; ")}`) : null,
         r.source ? h("span", { class: "chip" }, r.source) : null,
         r.evidence ? h("span", { class: "evidence" }, r.evidence) : null,
         refLinks(r.refs),

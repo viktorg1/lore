@@ -108,6 +108,7 @@ pending rules with links back to the comments. Reject one and it stays rejected.
 ## Safe by default
 
 - **Pending until you approve.** Anything inferred or suggested has no effect until you say so.
+- **Risky rules need a second look.** `approve --all` asks first, and rules that look like attacks ("ignore previous instructions", `curl | sh`, key files, links) are never bulk-approved.
 - **No hidden text.** Rules containing invisible Unicode, HTML comments or more than 500 characters are refused.
 - **Contradictions are flagged**, not silently merged ("use tabs" next to "use spaces").
 - **Small on purpose.** The agent gets at most 20 rules and 2,000 tokens per request.

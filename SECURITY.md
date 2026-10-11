@@ -15,6 +15,11 @@ folder, the web UI being driven from another website, a rule being activated wit
 - Rejects rule text with hidden Unicode, HTML comments or more than 500 characters.
 - Never serves or exports stored rules that contain hidden characters.
 - Keeps everything inferred or suggested *pending* until a person approves it.
+- Asks for confirmation before `review.py approve --all`, and never bulk-approves a rule that looks like an attack on the
+  agent (a pipe-to-shell command, "ignore previous instructions", key-file paths, web addresses and similar). Those need
+  an individual, explicit confirmation in the CLI and in the web UI. This is a tripwire, not a filter: a carefully worded
+  malicious rule will not be flagged, so read what you approve.
+- Spells out line breaks and hidden characters in folder names before showing them to the agent.
 - Refuses to write export files through symlinks or outside the project.
 - Binds the web UI to `127.0.0.1` only (the loopback IP, never `0.0.0.0`), so nothing else on your network can reach it.
 - Requires a random token on every API call, printed at startup and carried in the URL.

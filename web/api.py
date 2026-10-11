@@ -22,7 +22,7 @@ MAX_RESOLVE_PATHS = 20
 
 def rule_view(r: Rule, usage: Usage = Usage()) -> dict:
     hidden = r.hidden
-    return {"id": r.id, "text": sanitize.reveal(r.text) if hidden else r.text, "hidden": hidden, "scope": r.scope.key, "status": r.status.value,
+    return {"id": r.id, "text": sanitize.reveal(r.text) if hidden else r.text, "hidden": hidden, "risks": r.risks, "scope": r.scope.key, "status": r.status.value,
             "source": r.source, "evidence": r.evidence, "created": r.created, "refs": list(r.refs),
             "served": usage.served, "last_served": usage.last_served}
 
@@ -90,6 +90,9 @@ class Api:
             if repo.get(rule_id) is None:
                 raise ApiError(404, f"no rule {rule_id}")
             if action == "approve":
+                risks = repo.get(rule_id).risks
+                if risks and body.get("confirm_risky") is not True:
+                    raise ApiError(409, "This rule looks risky (" + "; ".join(risks) + "). Read it, then confirm to approve it.")
                 try:
                     repo.set_status([rule_id], Status.ACTIVE)
                 except ValueError as e:

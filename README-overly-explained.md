@@ -402,6 +402,12 @@ never as HTML. Stop it with Ctrl+C.
   stored before this check that contain such characters are shown with `<U+XXXX>` markers and a warning, are never served
   to an agent or exported, and cannot be approved until you edit or reject them. This is a safeguard, not a guarantee:
   a visible instruction that is simply malicious still needs your judgement when you approve it.
+- Approving is a deliberate step. `review.py approve --all` lists what it is about to approve and asks (`--yes` skips the
+  question). Rules whose text looks like an attack on the agent (it pipes a download into a shell, tells the model to ignore
+  its instructions, imitates a system message, names key files such as `~/.ssh`, contains a web address, or tells it to skip
+  review) are shown with a warning, are never included in `--all`, and need `approve <id>` plus a second confirmation; the
+  web UI does the same ("Review & approve", then "Approve anyway?"). These checks are simple patterns: they catch careless
+  attacks, not a carefully worded one, so read what you approve.
 - A rule that reverses the meaning of a similar one ("use tabs" next to "use spaces", "do" next to "do not", "max 80"
   next to "max 120") is added next to it with a warning instead of being merged into it. The check is a word heuristic;
   it will miss subtle contradictions, so read your active rules together now and then.
