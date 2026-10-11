@@ -10,6 +10,7 @@ from core import projects, store
 from core.models import Rule, Scope, Status
 from core.projects import Project
 from core.repository import RuleRepository
+from reviews.github import REPO_RE, parse_pr_numbers
 
 from .runner import Runner
 from .validation import ApiError, number_field, text_field
@@ -19,7 +20,7 @@ MAX_RESOLVE_PATHS = 20
 
 def rule_view(r: Rule) -> dict:
     return {"id": r.id, "text": r.text, "scope": r.scope.key, "status": r.status.value,
-            "source": r.source, "evidence": r.evidence, "created": r.created}
+            "source": r.source, "evidence": r.evidence, "created": r.created, "refs": list(r.refs)}
 
 
 def parse_scope(spec: str) -> Scope:
@@ -35,7 +36,8 @@ class Api:
         self.runner = runner or Runner()
         # tool name -> handler(project, params); each builds the argv of one lore script
         self._tools = {"remap": self._tool_remap, "train": self._tool_train, "discover": self._tool_discover,
-                       "resolve": self._tool_resolve, "sync": self._tool_sync, "mcp-check": self._tool_mcp_check}
+                       "learn": self._tool_learn, "resolve": self._tool_resolve, "sync": self._tool_sync,
+                       "mcp-check": self._tool_mcp_check}
 
     @staticmethod
     def _project(name: str) -> Project:
@@ -145,6 +147,27 @@ class Api:
         return self.runner.run(["discover.py", "--name", project.name,
                                 f"--min-ratio={number_field(p, 'minRatio', 0.9, float, 0.5, 1.0)}",
                                 f"--min-files={number_field(p, 'minFiles', 5, int, 1, 1000)}", *flags[mode]])
+
+    def _tool_learn(self, project: Project, p: dict) -> dict:
+        """learn.py: recurring PR review comments become pending rules (needs `gh`)."""
+        mode = p.get("mode", "preview")
+        if mode not in ("preview", "save"):
+            raise ApiError(400, "mode must be preview or save")
+        argv = ["learn.py", "--name", project.name, f"--min-repeats={number_field(p, 'minRepeats', 3, int, 2, 100)}"]
+        try:
+            prs = parse_pr_numbers(text_field(p, "prs", required=False, maxlen=300))
+        except ValueError as e:
+            raise ApiError(400, str(e))
+        if prs:   # exactly these pull requests; the date window does not apply
+            argv += [f"--pr={n}" for n in prs]
+        else:
+            argv.append(f"--since={number_field(p, 'since', 90, int, 1, 3650)}")
+        repo = text_field(p, "repo", required=False, maxlen=200)
+        if repo:
+            if not REPO_RE.match(repo):
+                raise ApiError(400, "repo must look like OWNER/NAME")
+            argv.append(f"--repo={repo}")
+        return self.runner.run(argv + (["--save"] if mode == "save" else []))
 
     def _tool_resolve(self, project: Project, p: dict) -> dict:
         paths = p.get("paths")

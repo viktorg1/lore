@@ -49,7 +49,8 @@ class TestApi(RegisteredProject):
         self.assertEqual(data["sections"], ["src", "tests"])
         self.assertEqual({r["status"] for r in data["rules"]}, {"active", "pending"})
         self.assertEqual(data["rules"][0]["evidence"], "12/12 files")
-        self.assertEqual(set(data["rules"][0]), {"id", "text", "scope", "status", "source", "evidence", "created"})
+        self.assertEqual(set(data["rules"][0]), {"id", "text", "scope", "status", "source", "evidence", "created", "refs"})
+        self.assertEqual(data["rules"][0]["refs"], [])
 
     def test_actions(self):
         rid = self.pending.id
@@ -158,8 +159,46 @@ class TestScripts(RegisteredProject):
         self.assertTrue(mcp["ok"], mcp["output"])
         self.assertIn("get_rules", mcp["output"])
 
+    def test_learn_from_reviews(self):
+        self.use_fake_gh()
+        preview = self.tool("learn", mode="preview")
+        self.assertTrue(preview["ok"], preview["output"])
+        self.assertEqual(preview["output"].count("similar review comments on"), 3)
+        before = len(self.repo.all())
+        saved = self.tool("learn", mode="save", since=60, minRepeats=3, repo="acme/shop")
+        self.assertTrue(saved["ok"], saved["output"])
+        new = [r for r in self.repo.all() if r.source == "review"]
+        self.assertEqual((len(self.repo.all()) - before, {r.status for r in new}), (3, {Status.PENDING}))
+        view = self.api.project_rules("app")["rules"]
+        self.assertTrue(all(r["refs"] for r in view if r["source"] == "review"))
+        failing = self.tool("learn", mode="preview")                  # already proposed: nothing new, still a clean run
+        self.assertIn("No new recurring themes", failing["output"])
+
+    def test_learn_reads_the_named_pull_requests_only(self):
+        log = self.use_fake_gh()
+        res = self.tool("learn", mode="preview", prs="10, 11-13", since=30)
+        self.assertTrue(res["ok"], res["output"])
+        self.assertEqual(res["command"].count("--pr="), 4)
+        self.assertNotIn("--since", res["command"])
+        self.assertIn("pull request(s) #10, #11, #12, #13", res["output"])
+        self.assertEqual(res["output"].count("similar review comments on"), 1)
+        self.assertNotIn("since=", log.read_text())
+        self.assertIn("--since=45", self.tool("learn", since=45)["command"])          # no PRs named: the date window applies
+
+    def test_learn_reports_gh_problems_as_output(self):
+        self.use_fake_gh(fail="gh: To use GitHub CLI, run: gh auth login")
+        res = self.tool("learn")
+        self.assertFalse(res["ok"])
+        self.assertIn("gh auth login", res["output"])
+
     def test_tool_validation(self):
         self.bad("nope")
+        self.bad("learn", mode="activate")
+        self.bad("learn", repo="not a repo")
+        self.bad("learn", since=0)
+        self.bad("learn", prs="12x")
+        self.bad("learn", prs="1-99")
+        self.bad("learn", minRepeats=1)
         self.bad("train")                                    # path required
         self.bad("train", path="x", scope="bogus")
         self.bad("discover", mode="explode")

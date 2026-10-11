@@ -137,9 +137,10 @@ class Rule:
     created: str = ""
     hits: int = 0
     edited: str | None = None
-    extra: dict = field(default_factory=dict)   # unknown keys from the file survive a load/save round-trip
+    refs: list[str] = field(default_factory=list)     # links to what justifies the rule (e.g. PR review comments)
+    extra: dict = field(default_factory=dict)         # unknown keys from the file survive a load/save round-trip
 
-    _KNOWN = ("id", "text", "scope", "status", "source", "evidence", "created", "hits", "edited")
+    _KNOWN = ("id", "text", "scope", "status", "source", "evidence", "created", "hits", "edited", "refs")
 
     @staticmethod
     def make_id(text: str, scope: Scope) -> str:
@@ -150,7 +151,7 @@ class Rule:
         return cls(
             id=d["id"], text=d["text"], scope=Scope.from_dict(d["scope"]), status=Status(d["status"]),
             source=d.get("source", ""), evidence=d.get("evidence", ""), created=d.get("created", ""),
-            hits=d.get("hits", 0), edited=d.get("edited"),
+            hits=d.get("hits", 0), edited=d.get("edited"), refs=list(d.get("refs") or []),
             extra={k: v for k, v in d.items() if k not in cls._KNOWN},
         )
 
@@ -159,4 +160,6 @@ class Rule:
              "source": self.source, "evidence": self.evidence, "created": self.created, "hits": self.hits}
         if self.edited:
             d["edited"] = self.edited
+        if self.refs:
+            d["refs"] = list(self.refs)
         return {**d, **self.extra}

@@ -2,7 +2,8 @@
 
     core         domain: models, storage, resolution            (imports nothing of lore's own)
     discovery    infers rules from code                          (core)
-    cli, web, mcpserver   interfaces                             (core, discovery)
+    reviews      infers rules from code review comments          (core)
+    cli, web, mcpserver   interfaces                             (core, discovery, reviews)
 
 The scripts at the repository root only wrap an interface's `main`.
 """
@@ -12,9 +13,10 @@ from pathlib import Path
 
 import support
 
-PACKAGES = {"core": set(), "discovery": {"core"}, "cli": {"core", "discovery"},
-            "web": {"core", "discovery"}, "mcpserver": {"core", "discovery"}}
-ROOT_SCRIPTS = {"memorize.py", "train.py", "discover.py", "review.py", "serve.py", "mcp_server.py"}
+PACKAGES = {"core": set(), "discovery": {"core"}, "reviews": {"core"},
+            "cli": {"core", "discovery", "reviews"}, "web": {"core", "discovery", "reviews"},
+            "mcpserver": {"core", "discovery", "reviews"}}
+ROOT_SCRIPTS = {"memorize.py", "train.py", "discover.py", "learn.py", "review.py", "serve.py", "mcp_server.py"}
 
 
 def imported_packages(path: Path) -> set[str]:

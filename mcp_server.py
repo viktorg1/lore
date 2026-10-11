@@ -4,6 +4,7 @@
 Tools:
   get_rules(paths)       rules for the files about to be edited (call BEFORE editing)
   record_feedback(rule)  save a correction as a pending rule (call when the user corrects you)
+  learn_from_reviews()   turn recurring PR review comments into pending rule proposals (on request)
 
 The project is detected from the file paths, so one global registration serves every project
 registered with memorize.py. Logs go to stderr; stdout is protocol only.

@@ -56,6 +56,9 @@
   .chip.ok { color: var(--ok); border-color: #4ade8055; }
   .chip.bad { color: var(--danger); border-color: #f8717155; }
   .evidence { overflow-wrap: anywhere; }
+  .refs { display: inline-flex; gap: 8px; }
+  .refs a { color: var(--accent); text-decoration: none; font-size: 12px; }
+  .refs a:hover { text-decoration: underline; }
   .actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 
   .btn { background: var(--panel-2); border: 1px solid var(--line); border-radius: 7px; padding: 4px 11px; cursor: pointer; white-space: nowrap; }
@@ -153,6 +156,7 @@ if (location.search) history.replaceState(null, "", location.pathname);   // kee
 const group = (v) => ({ v, out: null, running: false });
 const freshTools = () => ({
   discover: group({ minRatio: "0.9", minFiles: "5" }),
+  learn: group({ prs: "", since: "90", minRepeats: "3", repo: "" }),
   train: group({ path: "", scope: "", pending: false, dryRun: false }),
   resolve: group({ paths: "" }),
   project: group({}),
@@ -320,8 +324,19 @@ function card(r) {
       h("div", { class: "meta" },
         h("span", { class: "chip scope" }, r.scope),
         r.source ? h("span", { class: "chip" }, r.source) : null,
-        r.evidence ? h("span", { class: "evidence" }, r.evidence) : null)),
+        r.evidence ? h("span", { class: "evidence" }, r.evidence) : null,
+        refLinks(r.refs))),
     h("div", { class: "actions" }, actions));
+}
+
+// Links to the source of a rule (PR review comments). Only https URLs become links; text is never HTML.
+function refLinks(refs) {
+  const safe = (refs || []).filter((u) => /^https:\/\//.test(u));
+  if (!safe.length) return null;
+  return h("span", { class: "refs" }, ...safe.slice(0, 3).map((u) => {
+    const pr = u.match(/\/pull\/(\d+)/);
+    return h("a", { href: u, target: "_blank", rel: "noopener noreferrer" }, pr ? `PR #${pr[1]}` : "source");
+  }), safe.length > 3 ? h("span", { class: "evidence" }, `+${safe.length - 3}`) : null);
 }
 
 function scopeList() {
@@ -401,6 +416,19 @@ function renderTools() {
         state.sure === "disc" ? "Really save & approve?" : "Save & approve")),
     outputBox(T.discover));
 
+  const learn = h("section", { class: "tool" },
+    h("h3", {}, "Learn from PR reviews"),
+    h("p", {}, "Finds feedback reviewers repeat across pull requests and proposes it as pending rules, linked to the comments (learn.py). Name the pull requests to read, or leave that blank to read the recent ones. Needs the GitHub CLI (gh) installed and logged in on this machine; the wording is the reviewers', so edit it before approving."),
+    h("div", { class: "fields" },
+      field("Pull requests (blank = recent)", textInput(T.learn, "prs", { placeholder: "e.g. 12, 15-18", label: "Pull request numbers" })),
+      field("Days back (when no PRs are named)", textInput(T.learn, "since", { type: "number", mono: false, label: "Days back" })),
+      field("Min. similar comments", textInput(T.learn, "minRepeats", { type: "number", mono: false, label: "Minimum repeats" })),
+      field("Repository (optional)", textInput(T.learn, "repo", { placeholder: "owner/name (default: this project's remote)", label: "Repository" }))),
+    h("div", { class: "row" },
+      h("button", { class: "btn primary", disabled: !enabled(T.learn), onclick: guard(() => runTool(T.learn, "learn", { mode: "preview", ...T.learn.v })) }, "Preview"),
+      h("button", { class: "btn", disabled: !enabled(T.learn), onclick: guard(() => runTool(T.learn, "learn", { mode: "save", ...T.learn.v })) }, "Save as pending")),
+    outputBox(T.learn));
+
   const train = h("section", { class: "tool" },
     h("h3", {}, "Train on instruction files"), h("p", {}, "Turn a folder or file of standards (.md, .txt, .mdc, .cursorrules) into rules (train.py)."),
     h("div", { class: "fields" },
@@ -432,7 +460,7 @@ function renderTools() {
       h("button", { class: "btn", disabled: !enabled(P), onclick: guard(() => runTool(P, "mcp-check", {})) }, "Check MCP server (mcp_server.py)")),
     outputBox(P));
 
-  $("list").replaceChildren(discover, train, resolve, project);
+  $("list").replaceChildren(discover, learn, train, resolve, project);
 }
 
 function renderRegister() {

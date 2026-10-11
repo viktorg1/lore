@@ -40,8 +40,9 @@ class RuleRepository:
 
     # --- writing ---
     def add(self, text: str, scope: Scope, status: Status = Status.PENDING,
-            source: str = "manual", evidence: str = "") -> AddResult:
-        """Add a rule unless a near-identical one exists in the same scope (then that one is touched instead)."""
+            source: str = "manual", evidence: str = "", refs: list[str] | None = None) -> AddResult:
+        """Add a rule unless a near-identical one exists in the same scope (then that one is touched instead,
+        and gains any new `refs`)."""
         text = textutil.squash(text)
         if not text:
             raise ValueError("empty rule")
@@ -49,13 +50,14 @@ class RuleRepository:
         existing = self._duplicate_of(rules, text, scope)
         if existing:
             existing.hits += 1
+            existing.refs += [r for r in (refs or []) if r not in existing.refs]
             outcome = Outcome.DUPLICATE
             if existing.status is Status.PENDING and status is Status.ACTIVE:
                 existing.status, outcome = Status.ACTIVE, Outcome.PROMOTED
             self._save(rules)
             return AddResult(existing, outcome)
         rule = Rule(id=Rule.make_id(text, scope), text=text, scope=scope, status=status,
-                    source=source, evidence=evidence, created=store.now())
+                    source=source, evidence=evidence, created=store.now(), refs=list(dict.fromkeys(refs or [])))
         rules.append(rule)
         self._save(rules)
         return AddResult(rule, Outcome.ADDED)

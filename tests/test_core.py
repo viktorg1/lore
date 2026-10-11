@@ -78,6 +78,12 @@ class TestRule(unittest.TestCase):
         self.assertEqual((rule.status, rule.hits, rule.extra), (Status.ACTIVE, 2, {"future_field": {"x": 1}}))
         self.assertEqual(rule.to_dict(), raw)
 
+    def test_refs_round_trip_and_are_omitted_when_empty(self):
+        rule = Rule("id", "t", Scope.everywhere(), refs=["https://example.com/a"])
+        self.assertEqual(Rule.from_dict(rule.to_dict()).refs, ["https://example.com/a"])
+        self.assertNotIn("refs", Rule("id", "t", Scope.everywhere()).to_dict())
+        self.assertEqual(Rule.from_dict({"id": "i", "text": "t", "scope": {"type": "global"}, "status": "active"}).refs, [])
+
     def test_edited_is_only_written_when_set(self):
         rule = Rule("id", "t", Scope.everywhere())
         self.assertNotIn("edited", rule.to_dict())
@@ -100,6 +106,13 @@ class TestRepository(RegisteredProject):
         third = self.repo.add("Never use any in TypeScript", Scope.everywhere(), Status.PENDING)
         self.assertEqual(third.outcome, Outcome.DUPLICATE)
         self.assertEqual(self.repo.get(first.rule.id).hits, 2)
+
+    def test_refs_are_stored_deduped_and_merged_into_duplicates(self):
+        first = self.repo.add("Use the repository layer for DB access", Scope.everywhere(), refs=["u1", "u2", "u1"])
+        self.assertEqual(self.repo.get(first.rule.id).refs, ["u1", "u2"])
+        again = self.repo.add("use the repository layer for DB access.", Scope.everywhere(), refs=["u2", "u3"])
+        self.assertEqual((again.outcome, again.rule.refs), (Outcome.DUPLICATE, ["u1", "u2", "u3"]))
+        self.assertEqual(self.repo.get(first.rule.id).refs, ["u1", "u2", "u3"])
 
     def test_same_wording_in_another_scope_is_a_different_rule(self):
         self.repo.add("Keep functions short", Scope.everywhere())

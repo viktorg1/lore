@@ -15,9 +15,11 @@ It does not train model weights. It is retrieval memory: inspectable, editable, 
 memorize.py   maps the project (sections, languages)             -> ~/.lore/<name>/map.json
 train.py      turns your instruction docs into scoped rules      -> rules.json
 discover.py   infers rules from the code and tooling config      -> rules.json (pending)
-mcp_server.py gives the agent two tools:
+learn.py      turns recurring PR review comments into rules      -> rules.json (pending)
+mcp_server.py gives the agent three tools:
                 get_rules(paths)        call before editing  -> the rules for those files
                 record_feedback(rule)   call after you correct it -> a PENDING rule
+                learn_from_reviews()    on request: recurring PR review comments -> PENDING proposals
 review.py     you approve / reject / edit / add rules, preview what the agent sees, export to Copilot files
 serve.py      a local web page for all of the above: add projects and rules, review, run every script
 ```
@@ -154,9 +156,43 @@ automatically. Marker ids must be unique (a test enforces it). Quick one-offs wi
 `discover.py --markers extra.json`, a JSON list where each object has `kind` = `file|occ|absent|choice` plus the
 marker's fields.
 
+### 2c. Learn from code review
+
+```bash
+python3 learn.py --name myapp                 # preview what reviewers keep repeating (last 90 days)
+python3 learn.py --name myapp --save          # store it as PENDING rules
+python3 learn.py --name myapp --pr 120 --pr 124-130 --min-repeats 2    # read exactly these pull requests
+python3 learn.py --name myapp --since 30 --min-repeats 2 --reviewer alice --repo owner/name
+```
+
+This closes the loop on feedback you get in pull requests. It reads the inline review comments of the project's
+GitHub repository through the GitHub CLI (`gh`, installed and logged in: `gh auth login`), groups comments that ask for the
+same thing, and proposes a rule for every theme that came up **at least 3 times on at least 2 different pull requests**.
+
+**Choosing the pull requests.** By default it reads the repository's recent review comments (`--since`, 90 days). To read
+specific pull requests instead, name them with `--pr`: a number, a list or a range, repeatable (`--pr 120 --pr 124-130`,
+`--pr 12,15,19`, at most 50). Those PRs are read in full and `--since` is ignored. A short list needs gentler thresholds, so
+with `--pr` the default for `--min-prs` drops to the number of PRs you named (at most 2); naming a single PR looks for
+themes repeated inside it. Pass `--min-repeats 2` if a few PRs are all you have. In the UI this is the "Pull requests" field.
+Each proposal is scoped to what the comments were about (a section if they were all in one, else one file extension,
+else everywhere), and keeps links to the comments it came from, shown on the rule in the UI.
+
+What it does and doesn't do:
+
+- **The wording is the reviewers', not a rule.** It picks the most representative comment and tidies it ("Please add a
+  return type here" → "Add a return type here."). Reword it with `review.py edit` or in the UI before approving.
+- **Grouping is by shared words**, with some normalisation (`db` = `database`, `UserRepository` = `user repository`,
+  `logger` = `logging`). Paraphrases that share few words can be missed; look at the preview and lower `--min-repeats`
+  if you suspect it. It is deterministic and offline apart from the `gh` call; no language model is involved.
+- **Only inline review comments** are used, not PR descriptions, general PR comments or review summaries. Replies in a
+  thread and bot comments are ignored (`--include-bots` to keep the bots).
+- **A rejected proposal stays rejected.** Every comment that was proposed is remembered per project
+  (`~/.lore/<name>/review-ledger.json`), so re-running only shows new themes. `--include-seen` ignores that memory.
+- It runs `gh` inside the project's folder, so it finds the repository from the git remote; `--repo` overrides that.
+
 ## 3. Connect your agent
 
-Both Copilot clients use the same MCP server (`mcp_server.py`) and the same two tools. The project is detected from
+Both Copilot clients use the same MCP server (`mcp_server.py`) and the same three tools. The project is detected from
 the file paths, so one registration serves every project you ran `memorize.py` on. Two things are needed in each
 client: the MCP server entry, and an instruction telling the model to call the tools.
 
@@ -227,7 +263,7 @@ Verify the server is picked up (restart `copilot` after editing the file):
 
 ```bash
 copilot mcp list                    # lore should be listed
-copilot mcp get lore        # type, status and tools: get_rules, record_feedback
+copilot mcp get lore        # type, status and tools: get_rules, record_feedback, learn_from_reviews
 ```
 
 or, inside an interactive session, `/mcp show lore`.
@@ -250,8 +286,34 @@ EOF
 there too. Per the GitHub docs these locations are current, but the CLI changes quickly; if a path stops working, check
 the "custom instructions" and "add MCP servers" pages of the Copilot CLI documentation.
 
-Tool permission prompts: the CLI may ask before running an MCP tool. `get_rules` only reads; `record_feedback` only
-writes a pending rule to `~/.lore/<name>/rules.json`.
+Tool permission prompts: the CLI may ask before running an MCP tool. `get_rules` only reads; `record_feedback` and
+`learn_from_reviews` (with `save`) only write pending rules to `~/.lore/<name>/rules.json`.
+
+#### Learning from code review inside Copilot
+
+The MCP server also exposes `learn_from_reviews`, so you can simply ask for it in a session: *"use lore to learn from
+the review comments on PRs 120 and 124-130"*. With no `save` it only previews; with `save` it stores **pending** rules
+(never active) for you to reword and approve. It reads only the project's own repository (the tool has no `repo`
+argument), and it labels the quoted review comments as data so the agent does not follow instructions written in them.
+
+For a typed command there is a **skill**. Copilot CLI documents skills as folders with a `SKILL.md`, found in
+`~/.copilot/skills/` (personal) or `.github/skills/` (per project), and invoked by writing `/<skill-name>` in a prompt.
+Lore ships one, named `lore-learn`:
+
+```bash
+mkdir -p ~/.copilot/skills
+ln -s ~/projects/lore/copilot/skills/lore-learn ~/.copilot/skills/lore-learn
+```
+
+Then, in a session, `/skills reload` (or restart) and `/skills list` should show `lore-learn`, and you can type
+`/lore-learn 120-130`. The skill previews first, shows you the themes, and only saves after you say yes.
+
+Do you need a plugin? **No.** MCP gives you the tool, and the skill gives you the slash command. A plugin
+(`plugin.json` + `skills/` + `mcp.json`, installed with `copilot plugin install <dir>`) is only a way to ship the skill and
+the MCP server together as one install. The exact `/lore:learn` form (a plugin name, a colon, a skill name) is not
+documented for Copilot CLI, and skill names are lowercase letters, digits and hyphens, so `/lore-learn` is the documented
+spelling. Everything in this paragraph comes from GitHub's documentation, not from running Copilot CLI: check
+`/skills list` on your version.
 
 ### 3c. No MCP? Static fallback
 
@@ -301,6 +363,7 @@ A dark, single-page UI. Projects are listed on the left (a badge shows how many 
   | Card | Runs |
   |---|---|
   | Discover conventions | `discover.py`: preview, save as pending, or save & approve; adjustable thresholds |
+  | Learn from PR reviews | `learn.py`: preview or save the themes reviewers repeat (needs `gh`) |
   | Train on instruction files | `train.py`: folder or file, optional forced scope, pending and dry-run options |
   | What will the agent see? | `review.py resolve`: the exact rules handed to the agent for the files you list |
   | Project | `memorize.py` (re-map), `review.py sync` (write Copilot instruction files into the project) and a check that `mcp_server.py` answers the MCP handshake |
@@ -329,6 +392,11 @@ never as HTML. Stop it with Ctrl+C.
 | Section rule missing from `sync` output | The section is not in the map; re-run `memorize.py`. |
 | Server entry not listed in Copilot CLI | Wrong file/key: CLI uses `~/.copilot/mcp-config.json` with `mcpServers`/`"type": "local"`; VS Code uses `servers`/`"type": "stdio"`. |
 | `discover.py` proposes nothing | Fewer than 5 files of evidence, or no convention reaches 90%; try `--min-ratio 0.8`. |
+| `/lore-learn` is not recognised in Copilot CLI | The skill is not in `~/.copilot/skills/lore-learn/SKILL.md` (check the symlink), or the session started before you added it: `/skills reload`, then `/skills list`. |
+| The agent does not call `learn_from_reviews` | Ask for it by name ("use the lore learn_from_reviews tool for PRs 120-130"); check `copilot mcp get lore` lists it. |
+| `learn.py`: "gh is not installed" / "gh auth login" | Install the GitHub CLI and log in; `learn.py` uses your existing `gh` session and sends nothing else anywhere. |
+| `learn.py` finds comments but no themes | Needs 3+ similar comments on 2+ pull requests; try `--min-repeats 2`, a longer `--since`, or `--repo owner/name` if the git remote is not the repo you review. |
+| A proposal you rejected came back | Only with `--include-seen`, or after deleting the project's `review-ledger.json`. |
 
 ## Limits
 
@@ -340,12 +408,16 @@ never as HTML. Stop it with Ctrl+C.
 - `get_rules` returns at most ~800 tokens by default (`max_tokens`), most specific rules first.
 - Sections are derived from top-level folders (and one level under `src/`, `packages/`, `apps/`,
   `services/`, `lib/`, ...). Unusual layouts may need `glob:` scopes instead.
-- Rules are stored in plain JSON on your machine; nothing is sent anywhere by this tool.
+- Rules are stored in plain JSON on your machine; nothing is sent anywhere by this tool. (`learn.py` calls GitHub through
+  your own `gh` login to read review comments, and nothing else.)
+- Research on instruction files for coding agents is mixed: rules can help, but automatically generated context files
+  have not helped on average in at least one study, and more rules cost more tokens. Keep the approved set small and
+  prefer rules that say what *not* to do. Treat everything `discover.py` and `learn.py` propose as a draft for you to prune.
 
 ## Layout of this repo
 
 ```
-memorize.py  train.py  discover.py  review.py  serve.py  mcp_server.py
+memorize.py  train.py  discover.py  learn.py  review.py  serve.py  mcp_server.py
                          entry points: thin wrappers you run with python3 (their paths are stable, so
                          MCP configs and docs can point at them)
 
@@ -362,14 +434,19 @@ discovery/               infer rules from code (depends on core only)
   codebase.py  detectors.py  markers.py  ecosystems.py  scanner.py  registry.py  models.py
   languages/               one module per language (LANGUAGE + vanilla markers)
   frameworks/              one module per language family (FRAMEWORKS)
+reviews/                 learn from code review (depends on core only)
+  github.py                read PR review comments through `gh`;  text.py, cluster.py  group and tidy them
+  service.py               the whole pipeline (fetch, group, save), shared by learn.py and the MCP tool
+  ledger.py                remembers which comments were already proposed;  models.py
 cli/                     the command-line commands (one module per script) + shared plumbing
 web/                     serve.py's implementation: server.py (HTTP + security), api.py, runner.py, index.html
-mcpserver/               mcp_server.py's implementation: protocol.py (generic MCP) and tools.py (lore's two tools)
+copilot/skills/          the lore-learn skill for Copilot CLI (SKILL.md)
+mcpserver/               mcp_server.py's implementation: protocol.py (generic MCP) and tools.py (lore's three tools)
 tests/                   python3 -m unittest discover -s tests   (one file per area; test_architecture.py enforces the layering)
 ```
 
-The layers only depend downwards: `core` imports nothing of lore's own, `discovery` imports `core`, and the interfaces
-(`cli`, `web`, `mcpserver`) import `core` and `discovery`. To add a command, a tool or a web action, build it on `core`;
+The layers only depend downwards: `core` imports nothing of lore's own, `discovery` and `reviews` import `core`, and the
+interfaces (`cli`, `web`, `mcpserver`) import all three. To add a command, a tool or a web action, build it on `core`;
 to teach discovery a convention, add a marker (see above). A test fails if a lower layer imports a higher one.
 
 There is no install step and no package to install: the scripts find their sibling folders, so run them from anywhere by
