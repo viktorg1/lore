@@ -16,7 +16,6 @@ MAX_PRS = 50
 REPO_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
 LOGIN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$")
 
-
 def parse_pr_numbers(*specs: str) -> list[int]:
     """Pull-request numbers from specs like "12", "#12", "12,15" or "15-18"; order kept, duplicates dropped.
 
@@ -38,13 +37,10 @@ def parse_pr_numbers(*specs: str) -> list[int]:
                 raise ValueError(f"too many pull requests (at most {MAX_PRS} at a time)")
     return numbers
 
-
 class GhError(Exception):
     """gh is missing, not logged in, or GitHub refused: the message says what to do."""
 
-
 Runner = Callable[[list[str], Path | None], str]
-
 
 def run_gh(args: list[str], cwd: Path | None = None, timeout: int = 60) -> str:
     try:
@@ -56,7 +52,6 @@ def run_gh(args: list[str], cwd: Path | None = None, timeout: int = 60) -> str:
     if p.returncode != 0:
         raise GhError((p.stderr or p.stdout).strip() or f"gh exited with status {p.returncode}")
     return p.stdout
-
 
 def _comment(item) -> ReviewComment | None:
     """One API item as a ReviewComment, or None if it is not shaped like a review comment."""
@@ -70,10 +65,10 @@ def _comment(item) -> ReviewComment | None:
             id=int(item["id"]), url=item["html_url"], pr=int(pr_url.rsplit("/", 1)[1]) if "/pulls/" in pr_url else None,
             path=item.get("path"), body=item.get("body") or "", author=login,
             is_bot=user.get("type") == "Bot" or login.endswith("[bot]"),
-            is_reply=item.get("in_reply_to_id") is not None, created=item.get("created_at") or "")
+            is_reply=item.get("in_reply_to_id") is not None, created=item.get("created_at") or "",
+            association=str(item.get("author_association") or "").upper())
     except (KeyError, TypeError, ValueError, AttributeError):
         return None
-
 
 def _fetch_endpoint(endpoint: str, query: str, cwd: Path | None, limit: int, runner: Runner) -> list[ReviewComment]:
     comments: list[ReviewComment] = []
@@ -90,7 +85,6 @@ def _fetch_endpoint(endpoint: str, query: str, cwd: Path | None, limit: int, run
         if len(items) < PER_PAGE or len(comments) >= limit:
             break
     return comments[:limit]
-
 
 def fetch_review_comments(cwd: Path | None = None, *, repo: str | None = None, prs: list[int] | None = None,
                           since_days: int | None = 90, limit: int = 300, runner: Runner = run_gh) -> list[ReviewComment]:

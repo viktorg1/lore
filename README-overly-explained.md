@@ -15,11 +15,16 @@ It does not train model weights. It is retrieval memory: inspectable, editable, 
 memorize.py   maps the project (sections, languages)             -> ~/.lore/<name>/map.json
 train.py      turns your instruction docs into scoped rules      -> rules.json
 discover.py   infers rules from the code and tooling config      -> rules.json (pending)
-learn.py      turns recurring PR review comments into rules      -> rules.json (pending)
-mcp_server.py gives the agent three tools:
-                get_rules(paths)        call before editing  -> the rules for those files
-                record_feedback(rule)   call after you correct it -> a PENDING rule
-                learn_from_reviews()    on request: recurring PR review comments -> PENDING proposals
+learn.py      turns PR review comments into rule drafts          -> rules.json (pending)
+mcp_server.py gives the agent eight tools:
+                get_rules(paths, task)   call before editing  -> the rules that change needs (pinned + matching), no repeats
+                search_rules(query)      look up approved rules by topic, whatever their scope
+                record_feedback(rule)    call after you correct it -> a PENDING rule
+                learn_from_reviews()     PR review comments -> CANDIDATES for the agent to judge
+                discover_conventions()   code statistics -> CANDIDATES for the agent to verify and judge
+                propose_rules(rules)     the agent saves the ones it kept -> PENDING rules (never active)
+                organize_rules()         approved rules the agent has not sorted yet
+                tag_rules(tags)          the agent decides which rules apply to every edit, and when each one matters
 review.py     you approve / reject / edit / add rules, preview what the agent sees, export to Copilot files
 serve.py      a local web page for all of the above: add projects and rules, review, run every script
 ```
@@ -27,8 +32,54 @@ serve.py      a local web page for all of the above: add projects and rules, rev
 A rule has a **scope**: `global`, `section:<name>` (a folder-level area such as `src/api`), or
 `glob:<pattern>` (e.g. `**/*.{ts,tsx}`). More specific rules are listed first and win the token budget.
 Rules you add yourself or train from your own documents (`train.py`) are active immediately; rules from
-`discover.py`, `learn.py`, the agent's `record_feedback`, and instruction files imported by `memorize.py` start as
-**pending** and have no effect until you approve them.
+`discover.py`, `learn.py` and instruction files imported by `memorize.py` start as **pending** and have no effect until you
+approve them. What the agent proposes (`record_feedback`, `propose_rules`) is activated automatically when it passes the
+screening described under Automatic mode, and waits for you otherwise.
+
+## Automatic mode (the default)
+
+With `install.py` run once, you don't operate Lore. This is what happens by itself, and what each part is limited by.
+
+- **Setup.** `python3 install.py` adds the MCP server to Claude Code (`claude mcp add --scope user`) and to Copilot CLI
+  (`~/.copilot/mcp-config.json`, plus a marked block in `~/.copilot/copilot-instructions.md`). `--dry-run` shows the changes,
+  `--uninstall` removes them. It saves nothing else.
+- **Instructions.** The server sends its instructions when the client connects (about 300 tokens; the wording follows the
+  approval setting, so the agent never claims a waiting rule is active), so Claude Code needs no
+  `CLAUDE.md` entry. Copilot CLI is not known to show server instructions, so it gets the same text in the marked block.
+- **Registering projects.** The first time an agent asks about files in a git repository that Lore does not know, Lore
+  registers it (name = folder name, with a short suffix if that name is taken). It never registers your home folder, `/`,
+  a system folder or `~/.lore`, and it does not import `AGENTS.md`, `CLAUDE.md` or Copilot instruction files from the
+  repository (the agent's own client already loads those, and a just-cloned repository is not trusted to write rules).
+- **Setting a project up.** In a repository that is yours, the reply to the first `get_rules` tells the agent to run `discover_conventions` and, when the
+  repository is on GitHub and `gh` works, `learn_from_reviews`, to keep what a new contributor should follow, and to save it
+  with `propose_rules` (with titles, trigger words and `always`). Review feedback is read again when it has not been tried for
+  14 days; a failed attempt (for example `gh` not logged in) counts as tried, so the agent is not sent to retry it every
+  session. In a repository that is not yours Lore only says it will not learn there.
+  Each of these notes appears once per session.
+- **Learning from corrections.** When you correct the agent, it calls `record_feedback`.
+- **Which project.** Every tool works out the project from the files it is given (`paths`), then a folder (`path`), then a
+  project name (only the reading tools accept one), and last the folder the agent was started in. Tools that save rules
+  (`propose_rules`, `tag_rules`, `record_feedback`) never accept a project name, and paths outside the project are left out,
+  so rules cannot be aimed at a project the agent is not in.
+- **Trust.** A repository is *yours* when it has no remote, or when `gh api repos/OWNER/REPO` says your login can push to it
+  (checked once a week, kept in `~/.lore/<name>/trust.json`). Anything else, including a GitHub repository you cloned from
+  someone else, other hosts, or when the check fails, is not. `review.py trust` / `untrust` settle it by hand and
+  `trust --reset` hands it back to the check; the web UI shows the result next to the project name.
+- **Screening, then activation.** A rule the agent saves is activated at once unless it waits for you because: `approval` is
+  `manual`; the project is not one the agent is working on (one it asked `get_rules` about, or the one it was started in);
+  the repository is not yours; the rule looks like an attack on the agent (`core/risk.py`); it may contradict an existing rule;
+  or the session already activated `auto_limit` rules (25). Rules that hide characters are refused. The agent reports what it
+  activated and what waits.
+- **Who may teach it.** Review comments count only when GitHub says the author is an owner, member or collaborator of the
+  repository (`--include-external` on `learn.py` changes that).
+- **Undo.** Activated-by-Lore rules carry an `auto` timestamp: `review.py list --auto`, the "auto-activated" chip in the web
+  UI. `review.py reject <id>` deletes one; approving a rule yourself clears the mark.
+
+Settings (`~/.lore/config.json`, every key optional): `approval` (`auto` or `manual`, also `LORE_APPROVAL`), `auto_register`
+(true/false) and `auto_limit` (0-1000). `install.py --approval manual` writes the first one.
+
+What stays manual by design: scripts you run yourself (`discover.py`, `learn.py`, `memorize.py` and its imports) still save
+**pending** rules for you to approve, because you are not behind an agent there to judge them.
 
 Memory lives in `~/.lore/<name>/` (override the base folder with `LORE_HOME`):
 
@@ -164,21 +215,20 @@ marker's fields.
 ### 2c. Learn from code review
 
 ```bash
-python3 learn.py --name myapp                 # preview what reviewers keep repeating (last 90 days)
-python3 learn.py --name myapp --save          # store it as PENDING rules
-python3 learn.py --name myapp --pr 120 --pr 124-130 --min-repeats 2    # read exactly these pull requests
-python3 learn.py --name myapp --since 30 --min-repeats 2 --reviewer alice --repo owner/name
+python3 learn.py --name myapp                 # preview the actionable review comments (last 90 days)
+python3 learn.py --name myapp --save          # store them as PENDING rules
+python3 learn.py --name myapp --pr 120        # read exactly one pull request (also: --pr 124-130, --pr 12,15)
+python3 learn.py --name myapp --since 30 --min-repeats 3 --reviewer alice --repo owner/name   # only repeated feedback
 ```
 
 This closes the loop on feedback you get in pull requests. It reads the inline review comments of the project's
 GitHub repository through the GitHub CLI (`gh`, installed and logged in: `gh auth login`), groups comments that ask for the
-same thing, and proposes a rule for every theme that came up **at least 3 times on at least 2 different pull requests**.
+same thing, and proposes a rule for every theme. **One actionable comment on one pull request is enough**: praise, questions
+and comments already proposed are skipped. Pass `--min-repeats 3 --min-prs 2` to see only feedback that keeps coming back.
 
 **Choosing the pull requests.** By default it reads the repository's recent review comments (`--since`, 90 days). To read
 specific pull requests instead, name them with `--pr`: a number, a list or a range, repeatable (`--pr 120 --pr 124-130`,
-`--pr 12,15,19`, at most 50). Those PRs are read in full and `--since` is ignored. A short list needs gentler thresholds, so
-with `--pr` the default for `--min-prs` drops to the number of PRs you named (at most 2); naming a single PR looks for
-themes repeated inside it. Pass `--min-repeats 2` if a few PRs are all you have. In the UI this is the "Pull requests" field.
+`--pr 12,15,19`, at most 50). Those PRs are read in full and `--since` is ignored. In the UI this is the "Pull requests" field.
 Each proposal is scoped to what the comments were about (a section if they were all in one, else one file extension,
 else everywhere), and keeps links to the comments it came from, shown on the rule in the UI.
 
@@ -187,17 +237,67 @@ What it does and doesn't do:
 - **The wording is the reviewers', not a rule.** It picks the most representative comment and tidies it ("Please add a
   return type here" → "Add a return type here."). Reword it with `review.py edit` or in the UI before approving.
 - **Grouping is by shared words**, with some normalisation (`db` = `database`, `UserRepository` = `user repository`,
-  `logger` = `logging`). Paraphrases that share few words can be missed; look at the preview and lower `--min-repeats`
-  if you suspect it. It is deterministic and offline apart from the `gh` call; no language model is involved.
+  `logger` = `logging`). Paraphrases that share few words can stay separate. This script is deterministic and offline
+  apart from the `gh` call; no language model is involved. For judgement, use the agent (next section).
 - **Only inline review comments** are used, not PR descriptions, general PR comments or review summaries. Replies in a
   thread and bot comments are ignored (`--include-bots` to keep the bots).
 - **A rejected proposal stays rejected.** Every comment that was proposed is remembered per project
   (`~/.lore/<name>/review-ledger.json`), so re-running only shows new themes. `--include-seen` ignores that memory.
 - It runs `gh` inside the project's folder, so it finds the repository from the git remote; `--repo` overrides that.
 
+### 2d. Let the agent decide
+
+A script cannot tell a real convention from a one-off remark, or a healthy habit from an accident. The agent can, so the
+two judging steps go through it. You ask in plain words in Copilot ("learn from PR 120", "find this project's
+conventions") and the agent calls:
+
+1. `learn_from_reviews` (pull request comments) or `discover_conventions` (code and tooling). Neither saves anything. They
+   return **candidates**: for review feedback, the reviewers' own words with the file each comment was about; for discovery,
+   the pattern with its evidence. A single comment on a single PR is a candidate.
+2. The agent reads the candidates, checks the interesting ones against the real code, drops one-offs, taste and anything a
+   linter already enforces, and rewrites each survivor as one short imperative sentence with the narrowest scope that fits.
+3. `propose_rules` saves them in one call as **pending** rules, with links to the comments they came from. Comments it
+   judged not worth a rule go in `dismiss`, so they are not offered again; if the list was long, the next
+   `learn_from_reviews` call returns the next batch.
+
+The agent cannot activate anything: the tool has no way to, and duplicates, possible contradictions and risky-looking text
+are reported back to it so it can tell you. Quoted review comments are untrusted data that other people wrote, so the tool
+labels them as such and the agent is told not to follow instructions inside them; the pending gate and the risk check
+are the backstop if it does anyway. The terminal scripts (`learn.py`, `discover.py`) still work without an agent.
+
+**Sending only what the work needs.** Sending every rule on every edit wastes tokens, and keyword matching alone cannot tell
+that "indent with 4 spaces" matters when the task says "add a check". So the agent, which can read both the rule and the
+task, makes that call, once per rule, and Lore applies it cheaply on every request:
+
+1. **Organise (once, and after adding rules).** Ask the agent to "organise my Lore rules". It calls `organize_rules`, reads the
+   rules that have no tags, and calls `tag_rules` with a judgement for each:
+   - `always`: true only if the rule must be followed on essentially every edit within its scope (style, safety,
+     architecture invariants). These are sent on every call.
+   - `title`: 3-6 words, used in the list of rules that were not sent.
+   - `triggers`: up to 12 words a task contains when the rule matters, with synonyms ("column", "schema", "migration").
+   Rules the agent proposes (`propose_rules`, `learn_from_reviews`, `discover_conventions`) arrive with the same fields.
+   The tags are visible (`review.py list --details`, the 🏷 and 📌 chips in the web UI) and you can change them: `review.py
+   pin`/`unpin`, or the Pin button. `tag_rules` can only switch `always` on, never off, and never touches a rule's text, scope
+   or status.
+2. **Each request.** `get_rules(paths, task)` considers the rules whose scope covers the files. With more than 10 of them it
+   sends the `always` rules plus those whose text, title or triggers share words or a topic with the task and score at least
+   30% of the best match.
+3. **What it did not send.** The reply lists the id and title of every other rule that covers the files. If one matters, the
+   agent calls `get_rules` again with that id in `include`, or uses `search_rules`. Titles are listed once per session.
+4. **No repeats.** A rule already sent in this session is not sent again (`refresh=true` repeats them, for after the agent's
+   context was reset). Only what is actually sent counts as served.
+5. With no `task`, or 10 or fewer eligible rules, everything eligible is sent: filtering so little saves nothing, and without
+   a task Lore cannot tell what is relevant.
+
+The word matching itself is plain keyword ranking plus a small topic vocabulary (`core/search.py`); no model or network is
+involved at request time. The agent's judgement is applied when tagging, so a request costs no extra model call. A rule that
+was never tagged is matched on its text alone, so it can be held back when it should not be; the title list is the safety
+net, and `review.py list` reminds you how many rules are untagged. `review.py resolve <paths> --task "..."` shows exactly what
+the agent would get.
+
 ## 3. Connect your agent
 
-Both Copilot clients use the same MCP server (`mcp_server.py`) and the same three tools. The project is detected from
+Both Copilot clients use the same MCP server (`mcp_server.py`) and the same tools. The project is detected from
 the file paths, so one registration serves every project you ran `memorize.py` on. Two things are needed in each
 client: the MCP server entry, and an instruction telling the model to call the tools.
 
@@ -235,9 +335,14 @@ Copilot actually calls the tools:
 applyTo: "**"
 ---
 Before creating or editing any file, call the `get_rules` tool from the lore server with
-the absolute paths you are about to change, and follow the rules it returns. If a rule conflicts
-with the request, ask me. When I correct your code or state a standard you violated, call
-`record_feedback` with one short, general, imperative rule.
+the absolute paths you are about to change and, in `task`, one sentence about the change, and follow
+the rules it returns. If a rule conflicts with the request, ask me. If a decision may be covered by a
+rule, call `search_rules`; if the reply lists a held-back rule whose title matters, call `get_rules` again
+with its id in `include`. When I correct your code or state a standard you violated, call
+`record_feedback` with one short, general, imperative rule. When I ask you to learn from code review or
+to find the project's conventions, use `learn_from_reviews` or `discover_conventions`, judge the
+candidates yourself, and save the ones worth keeping with `propose_rules`. When I ask you to organise
+my rules, use `organize_rules` and `tag_rules`.
 ```
 
 Menu names vary by VS Code version. Use agent mode — MCP tools are not available in plain completions.
@@ -268,7 +373,7 @@ Verify the server is picked up (restart `copilot` after editing the file):
 
 ```bash
 copilot mcp list                    # lore should be listed
-copilot mcp get lore        # type, status and tools: get_rules, record_feedback, learn_from_reviews
+copilot mcp get lore        # type, status and tools: get_rules, search_rules, record_feedback, learn_from_reviews, discover_conventions, propose_rules
 ```
 
 or, inside an interactive session, `/mcp show lore`.
@@ -279,9 +384,12 @@ Then give the CLI the same instruction. A **user-level** file applies to every r
 mkdir -p ~/.copilot
 cat >> ~/.copilot/copilot-instructions.md <<'EOF'
 Before creating or editing any file, call the `get_rules` tool from the lore server with
-the absolute paths you are about to change, and follow the rules it returns. If a rule conflicts
-with the request, ask me. When I correct your code or state a standard you violated, call
-`record_feedback` with one short, general, imperative rule.
+the absolute paths you are about to change and, in `task`, one sentence about the change, and follow
+the rules it returns. If a rule conflicts with the request, ask me. If a decision may be covered by a
+rule, call `search_rules`. When I correct your code or state a standard you violated, call
+`record_feedback` with one short, general, imperative rule. When I ask you to learn from code review or
+to find the project's conventions, use `learn_from_reviews` or `discover_conventions`, judge the
+candidates yourself, and save the ones worth keeping with `propose_rules`.
 EOF
 ```
 
@@ -291,7 +399,7 @@ EOF
 there too. Per the GitHub docs these locations are current, but the CLI changes quickly; if a path stops working, check
 the "custom instructions" and "add MCP servers" pages of the Copilot CLI documentation.
 
-Tool permission prompts: the CLI may ask before running an MCP tool. `get_rules` only reads; `record_feedback` and
+Tool permission prompts: the CLI may ask before running an MCP tool. `get_rules` and `search_rules` only read; `record_feedback`, `propose_rules` and
 `learn_from_reviews` (with `save`) only write pending rules to `~/.lore/<name>/rules.json`.
 
 #### Learning from code review inside Copilot
@@ -391,7 +499,7 @@ never as HTML. Stop it with Ctrl+C.
 | `discover.py` proposes nothing | Fewer than 5 files of evidence, or no convention reaches 90%; try `--min-ratio 0.8`. |
 | The agent does not call `learn_from_reviews` | Ask for it by name ("use the lore learn_from_reviews tool for PRs 120-130"); check `copilot mcp get lore` lists it. |
 | `learn.py`: "gh is not installed" / "gh auth login" | Install the GitHub CLI and log in; `learn.py` uses your existing `gh` session and sends nothing else anywhere. |
-| `learn.py` finds comments but no themes | Needs 3+ similar comments on 2+ pull requests; try `--min-repeats 2`, a longer `--since`, or `--repo owner/name` if the git remote is not the repo you review. |
+| `learn.py` finds comments but no themes | Nothing actionable in the comments it read (praise, questions and already-proposed comments are skipped); try a longer `--since`, `--include-seen`, or `--repo owner/name` if the git remote is not the repo you review. |
 | A proposal you rejected came back | Only with `--include-seen`, or after deleting the project's `review-ledger.json`. |
 
 ## Limits
@@ -411,15 +519,14 @@ never as HTML. Stop it with Ctrl+C.
 - A rule that reverses the meaning of a similar one ("use tabs" next to "use spaces", "do" next to "do not", "max 80"
   next to "max 120") is added next to it with a warning instead of being merged into it. The check is a word heuristic;
   it will miss subtle contradictions, so read your active rules together now and then.
-- The agent receives at most 20 rules and 2,000 tokens per `get_rules` call (800 tokens by default), most specific first;
-  when a rule does not fit, nothing more general is served in its place. The research on instruction files suggests a short,
-  specific set works better than a long one, and `review.py usage` tells you when you have more than the agent can receive.
+- `get_rules` sends only the rules the task needs (see "Sending only what the work needs"). Selection uses the agent's
+  tags and keyword matching, so it can hold back a rule that matters; the title list and `include` are the safety net. Have
+  the agent tag your rules, and prune the ones `review.py usage` shows are never served.
 - The agent calls `get_rules` because your instruction tells it to. That is a request, not enforcement;
   a model can skip it. Check with `review.py resolve` and look for the tool call in the chat.
 - Deterministic extraction cannot judge rule quality. Keep sources short and specific, and prune.
 - Discovery is regex-based and heuristic: markers can mis-fire on comments or strings and are only lightly tested
   against real projects. Treat every proposed rule as a suggestion with evidence, not a fact.
-- `get_rules` returns at most ~800 tokens by default (`max_tokens`), most specific rules first.
 - Sections are derived from top-level folders (and one level under `src/`, `packages/`, `apps/`,
   `services/`, `lib/`, ...). Unusual layouts may need `glob:` scopes instead.
 - Rules are stored in plain JSON on your machine; nothing is sent anywhere by this tool. (`learn.py` calls GitHub through
@@ -455,7 +562,7 @@ reviews/                 learn from code review (depends on core only)
   ledger.py                remembers which comments were already proposed;  models.py
 cli/                     the command-line commands (one module per script) + shared plumbing
 web/                     serve.py's implementation: server.py (HTTP + security), api.py, runner.py, index.html
-mcpserver/               mcp_server.py's implementation: protocol.py (generic MCP) and tools.py (lore's three tools)
+mcpserver/               mcp_server.py's implementation: protocol.py (generic MCP) and tools.py (lore's tools)
 tests/                   python3 -m unittest discover -s tests   (one file per area; test_architecture.py enforces the layering)
 ```
 

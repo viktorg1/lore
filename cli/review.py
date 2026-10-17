@@ -5,9 +5,11 @@
     review.py --name P approve <id>... | --all [--yes]   (asks first; --all skips rules that look risky)
     review.py --name P unapprove <id>...       (back to pending)
     review.py --name P reject <id>...          (rejected rules are deleted)
+    review.py --name P pin <id>... | unpin <id>...   (pinned rules are sent with every get_rules call, whatever the task)
+    review.py --name P trust [--reset] | untrust     (whether rules may be activated here without you; see reviews/trust.py)
     review.py --name P edit <id> [--text "new wording"] [--scope section:api]
     review.py --name P usage                   (which approved rules the agent actually receives; unused first)
-    review.py --name P resolve src/api/users.py [more paths]   (what the agent would be told)
+    review.py --name P resolve src/api/users.py [more paths] [--task "add pagination"]   (what the agent would be told)
     review.py --name P sync                    (write .github/instructions/*.instructions.md)
 """
 from __future__ import annotations
@@ -21,6 +23,7 @@ from core.models import Status
 from core.projects import Project
 from core.repository import RuleRepository
 from core.usage import Usage, UsageLog
+from reviews import trust
 
 from .common import CliError, entry, load_project, make_parser, parse_scope
 
@@ -31,15 +34,22 @@ def build_parser():
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("list"); p.add_argument("--status", choices=[s.value for s in Status])
     p.add_argument("--details", action="store_true", help="also show where each rule came from")
+    p.add_argument("--auto", action="store_true", help="only rules Lore activated by itself (nobody approved them)")
     p = sub.add_parser("add"); p.add_argument("text"); p.add_argument("--scope", default="global")
     p.add_argument("--pending", action="store_true")
+    p.add_argument("--pin", action="store_true", help="send it with every get_rules call, whatever the task")
+    p = sub.add_parser("pin"); p.add_argument("ids", nargs="+")
+    p = sub.add_parser("unpin"); p.add_argument("ids", nargs="+")
+    p = sub.add_parser("trust"); p.add_argument("--reset", action="store_true", help="let the automatic check decide again")
+    sub.add_parser("untrust")
     p = sub.add_parser("approve"); p.add_argument("ids", nargs="*"); p.add_argument("--all", action="store_true")
     p.add_argument("-y", "--yes", action="store_true", help="do not ask for confirmation")
     p = sub.add_parser("unapprove"); p.add_argument("ids", nargs="+")
     p = sub.add_parser("reject"); p.add_argument("ids", nargs="+")
     p = sub.add_parser("edit"); p.add_argument("id"); p.add_argument("--text"); p.add_argument("--scope")
     p = sub.add_parser("resolve"); p.add_argument("paths", nargs="+")
-    p.add_argument("--max-tokens", type=int, default=resolver.DEFAULT_MAX_TOKENS)
+    p.add_argument("--task", default="", help="a sentence about the work: rules that talk about it are listed first")
+    p.add_argument("--max-tokens", type=int, default=None, help="optional cap; by default every applicable rule is shown")
     sub.add_parser("usage")
     sub.add_parser("sync")
     return ap
@@ -59,10 +69,13 @@ def _relative(root: Path, p: str) -> str:
 # --- one function per subcommand: (project, parsed args) -> exit code ---
 
 def cmd_list(project: Project, args) -> int:
-    shown = [r for r in RuleRepository(project.name).all() if not args.status or r.status.value == args.status]
+    shown = [r for r in RuleRepository(project.name).all()
+             if (not args.status or r.status.value == args.status) and (not args.auto or r.auto)]
     hidden = risky = 0
     for r in shown:
-        flag = f"  [!! {r.hidden} hidden character(s) shown as <U+XXXX>]" if r.hidden else ""
+        flag = "  [pinned]" if r.always else ""
+        flag += f"  [auto-activated {r.auto[:10]}]" if r.auto else ""
+        flag += f"  [!! {r.hidden} hidden character(s) shown as <U+XXXX>]" if r.hidden else ""
         if r.risks:
             flag += f"  [!! looks risky: {'; '.join(r.risks)}]"
             risky += 1
@@ -77,12 +90,18 @@ def cmd_list(project: Project, args) -> int:
             print("          " + "  ".join(bits))
             if r.evidence:
                 print(f"          evidence: {r.evidence}")
+            if r.tagged:
+                print(f"          tags ({r.tagged}): {r.index_title}; triggers: {', '.join(r.triggers) or '-'}")
             for ref in r.refs[:5]:
                 print(f"          link: {ref}")
     print(f"-- {len(shown)} rule(s)")
     if hidden:
         print(f"warning: {hidden} rule(s) contain hidden characters; they are never served or exported, and cannot be "
               "approved until you edit or reject them.", file=sys.stderr)
+    untagged = sum(1 for r in shown if r.status is Status.ACTIVE and not r.tagged and not r.hidden)
+    if untagged:
+        print(f"note: {untagged} approved rule(s) have no tags. Ask your agent to organise them (the organize_rules tool) so "
+              "the right rules are sent for each task without pinning.", file=sys.stderr)
     if risky:
         print(f"warning: {risky} rule(s) look like an attack on the agent rather than a convention. Read them "
               "before approving; `approve --all` skips them.", file=sys.stderr)
@@ -92,7 +111,10 @@ def cmd_list(project: Project, args) -> int:
 def cmd_add(project: Project, args) -> int:
     status = Status.PENDING if args.pending else Status.ACTIVE
     try:
-        result = RuleRepository(project.name).add(args.text, parse_scope(args.scope), status, source="manual")
+        repo = RuleRepository(project.name)
+        result = repo.add(args.text, parse_scope(args.scope), status, source="manual")
+        if args.pin:
+            repo.set_always([result.rule.id], True)
     except ValueError as e:
         raise CliError(str(e))
     print(f"{result.outcome}: {result.rule.id}")
@@ -157,6 +179,25 @@ def cmd_unapprove(project: Project, args) -> int:
     return 0
 
 
+def cmd_pin(project: Project, args) -> int:
+    done = RuleRepository(project.name).set_always(args.ids, args.cmd == "pin")
+    print(f"{'pinned' if args.cmd == 'pin' else 'unpinned'} {len(done)} rule(s)")
+    if len(done) != len(args.ids):
+        print("warning: some ids were not found", file=sys.stderr)
+    return 0
+
+
+def cmd_trust(project: Project, args) -> int:
+    if args.cmd == "trust" and args.reset:
+        trust.set_manual(project, None)
+        now = trust.get(project)
+    else:
+        trust.set_manual(project, args.cmd == "trust")
+        now = trust.stored(project)
+    print(f"{project.name}: {'trusted' if now.trusted else 'not trusted'} ({now.reason})")
+    return 0
+
+
 def cmd_reject(project: Project, args) -> int:
     done = RuleRepository(project.name).remove(args.ids)
     print(f"rejected {len(done)} rule(s)")
@@ -181,7 +222,10 @@ def cmd_edit(project: Project, args) -> int:
 
 def cmd_resolve(project: Project, args) -> int:
     rel = [_relative(project.root, p) for p in args.paths]
-    print(resolver.resolve(project.name, rel, args.max_tokens).text or "(no rules apply)")
+    res = resolver.resolve(project.name, rel, task=args.task, max_tokens=args.max_tokens, select=bool(args.task.strip()))
+    print(res.text or "(no rules apply)")
+    if res.held:
+        print(f"-- {len(res.held)} other rule(s) cover these files but do not match the task, so the agent is not sent them")
     return 0
 
 
@@ -196,9 +240,6 @@ def cmd_usage(project: Project, args) -> int:
         print(f"{u.served or 'never':<7} {u.last_served or '-':<19} {r.id:<8}  {r.scope.key:<24} {r.text}")
     unused = sum(1 for r in rules if usage.get(r.id, Usage()).served == 0)
     print(f"-- {len(rules)} approved rule(s); {unused} never served")
-    if len(rules) > resolver.MAX_RULES:
-        print(f"note: the agent receives at most {resolver.MAX_RULES} rules per call (most specific first); with "
-              f"{len(rules)} approved, some will rarely be served. Consider pruning the unused ones.")
     if rules and unused == len(rules):
         print("Nothing has been served yet: this counts what an agent receives through the MCP server's get_rules "
               "(not previews such as `review.py resolve`).")
@@ -217,7 +258,7 @@ def cmd_sync(project: Project, args) -> int:
     return 0
 
 
-COMMANDS = {"list": cmd_list, "add": cmd_add, "approve": cmd_approve, "unapprove": cmd_unapprove, "reject": cmd_reject,
+COMMANDS = {"list": cmd_list, "add": cmd_add, "approve": cmd_approve, "unapprove": cmd_unapprove, "pin": cmd_pin, "unpin": cmd_pin, "trust": cmd_trust, "untrust": cmd_trust, "reject": cmd_reject,
             "edit": cmd_edit, "resolve": cmd_resolve, "usage": cmd_usage, "sync": cmd_sync}
 
 

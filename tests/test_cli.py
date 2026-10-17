@@ -8,7 +8,6 @@ from core.models import Scope, Status
 from core.repository import RuleRepository
 from core.usage import UsageLog
 
-
 class CliCase(TempHome):
     """A scratch project folder 'demoproj' with a little code, not yet registered."""
 
@@ -21,7 +20,6 @@ class CliCase(TempHome):
     def register(self):
         self.assertEqual(self.script("memorize.py", "--path", self.proj).returncode, 0)
         return RuleRepository("demoproj")
-
 
 class TestMemorize(CliCase):
     def test_default_name_and_map(self):
@@ -58,7 +56,6 @@ class TestMemorize(CliCase):
         self.script("memorize.py", "--path", self.proj, "--no-import")
         self.assertEqual(RuleRepository("demoproj").all(), [])
 
-
 class TestTrain(CliCase):
     def test_folder_is_idempotent_and_unknown_project_fails(self):
         repo = self.register()
@@ -82,7 +79,6 @@ class TestTrain(CliCase):
         self.assertEqual(repo.all(), [])
         self.script("train.py", "--name", "demoproj", "--from", doc, "--pending", "--scope", "section:src")
         self.assertEqual([(r.status, r.scope.key) for r in repo.all()], [(Status.PENDING, "section:src")])
-
 
 class TestReview(CliCase):
     def setUp(self):
@@ -130,6 +126,41 @@ class TestReview(CliCase):
         self.assertEqual(self.review("approve", evil.id, "--yes").returncode, 0)
         self.assertEqual(self.repo.get(evil.id).status, Status.ACTIVE)
 
+    def test_pin_unpin_and_resolve_with_a_task(self):
+        for i in range(12):
+            self.repo.add(f"Convention number {i} about logging in module m{i}", Scope.everywhere(), Status.ACTIVE)
+        self.repo.add("Use the repository layer for database access", Scope.everywhere(), Status.ACTIVE)
+        out = self.review("resolve", "src/api/x.py", "--task", "add a database query").stdout
+        self.assertIn("repository layer", out)
+        self.assertNotIn("Convention number", out)
+        self.assertIn("other rule(s) cover these files", out)
+        target = next(r for r in self.repo.all() if "number 2 " in r.text)
+        self.assertIn("pinned 1 rule(s)", self.review("pin", target.id).stdout)
+        self.assertIn("[pinned]", self.review("list").stdout)
+        self.assertIn(target.text, self.review("resolve", "src/api/x.py", "--task", "add a database query").stdout)
+        self.assertIn("unpinned 1 rule(s)", self.review("unpin", target.id).stdout)
+        self.assertNotIn("[pinned]", self.review("list").stdout)
+        self.assertIn("added:", self.review("add", "Never commit secrets", "--pin").stdout)
+        self.assertTrue([r for r in self.repo.all() if r.text == "Never commit secrets"][0].always)
+
+    def test_list_nudges_about_untagged_rules_and_shows_tags(self):
+        r = self.review("list")
+        self.assertIn("approved rule(s) have no tags", r.stderr)
+        self.repo.set_tags([{"id": self.b.id, "title": "SDK adapters", "triggers": ["sdk", "vendor"]}], "agent")
+        out = self.review("list", "--details")
+        self.assertIn("tags (agent ", out.stdout)
+        self.assertIn("SDK adapters; triggers: sdk, vendor", out.stdout)
+        self.assertNotIn("approved rule(s) have no tags", out.stderr)
+
+    def test_auto_activated_rules_are_marked_and_filterable(self):
+        repo = self.repo
+        auto = repo.add("Keep modules cohesive", Scope.everywhere(), Status.PENDING).rule
+        repo.set_status([auto.id], Status.ACTIVE, auto=True)
+        out = self.review("list", "--auto").stdout
+        self.assertIn("Keep modules cohesive", out)
+        self.assertIn("[auto-activated ", out)
+        self.assertNotIn(self.b.text, out)
+
     def test_edit(self):
         out = self.review("edit", self.a.id, "--text", "Validate input at every boundary")
         self.assertEqual(out.returncode, 0, out.stderr)
@@ -173,7 +204,6 @@ class TestReview(CliCase):
         self.assertEqual(self.script("review.py", "--name", "ghost", "list").returncode, 2)
         self.assertEqual(self.script("review.py", "--name", "../x", "list").returncode, 2)
 
-
 class TestDiscoverCli(CliCase):
     def test_preview_saves_nothing_then_saves_pending_idempotently(self):
         repo = self.register()
@@ -197,7 +227,6 @@ class TestDiscoverCli(CliCase):
         r = self.script("discover.py", "--name", "demoproj")
         self.assertEqual(r.returncode, 2)
         self.assertIn("no longer exists", r.stderr)
-
 
 if __name__ == "__main__":
     unittest.main()

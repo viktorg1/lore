@@ -8,11 +8,9 @@ from typing import Callable, TextIO
 
 DEFAULT_PROTOCOL_VERSION = "2024-11-05"
 
-
 def log(*args) -> None:
     """Logs go to stderr; stdout is protocol only."""
     print("[lore]", *args, file=sys.stderr, flush=True)
-
 
 @dataclass(frozen=True)
 class Tool:
@@ -24,10 +22,9 @@ class Tool:
     def listing(self) -> dict:
         return {"name": self.name, "description": self.description, "inputSchema": self.input_schema}
 
-
 class McpServer:
-    def __init__(self, name: str, version: str, tools: list[Tool]):
-        self.name, self.version = name, version
+    def __init__(self, name: str, version: str, tools: list[Tool], instructions: str = ""):
+        self.name, self.version, self.instructions = name, version, instructions
         self.tools = {t.name: t for t in tools}
 
     def handle(self, msg: dict) -> dict | None:
@@ -44,8 +41,11 @@ class McpServer:
 
         if method == "initialize":
             version = (msg.get("params") or {}).get("protocolVersion") or DEFAULT_PROTOCOL_VERSION
-            return ok({"protocolVersion": version, "capabilities": {"tools": {}},
-                       "serverInfo": {"name": self.name, "version": self.version}})
+            result = {"protocolVersion": version, "capabilities": {"tools": {}},
+                      "serverInfo": {"name": self.name, "version": self.version}}
+            if self.instructions:      # clients that support it show these to the model, so no instruction file is needed
+                result["instructions"] = self.instructions
+            return ok(result)
         if method == "ping":
             return ok({})
         if method == "tools/list":

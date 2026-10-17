@@ -23,7 +23,6 @@ def run_script(name: str, *args, stdin: str | None = None, env: dict | None = No
     return subprocess.run([sys.executable, str(ROOT / name), *map(str, args)], capture_output=True, text=True,
                           input=stdin, env=env, cwd=cwd)
 
-
 FAKE_GH = """#!/usr/bin/env python3
 import json, os, re, sys
 args = sys.argv[1:]
@@ -40,15 +39,14 @@ if only:
 print(json.dumps(data[(page - 1) * 100: page * 100]))
 """
 
-
 def api_comment(cid: int, pr: int, path: str, body: str, login: str = "ann", bot: bool = False,
                 reply_to: int | None = None) -> dict:
     """A pull-request review comment shaped like GitHub's REST API returns it."""
     return {"id": cid, "html_url": f"https://github.com/acme/shop/pull/{pr}#discussion_r{cid}",
             "pull_request_url": f"https://api.github.com/repos/acme/shop/pulls/{pr}", "path": path, "body": body,
             "user": {"login": login, "type": "Bot" if bot else "User"}, "in_reply_to_id": reply_to,
+            "author_association": "MEMBER",
             "created_at": f"2026-01-{cid % 28 + 1:02d}T10:00:00Z"}
-
 
 # three themes reviewers keep repeating, mixed with the usual noise and look-alike but different asks
 THEMES = [
@@ -75,7 +73,6 @@ NOISE = [
     "Use early returns to reduce nesting.", "Avoid mutable default arguments.",
 ]
 
-
 def review_corpus() -> list[dict]:
     """API-shaped comments: each theme comment on its own PR, plus one-off noise and a bot and a reply."""
     out, cid = [], 100
@@ -88,7 +85,6 @@ def review_corpus() -> list[dict]:
     out.append(api_comment(cid, 99, "src/api/b.py", "Use the logger instead of print()", login="copilot[bot]", bot=True))
     out.append(api_comment(cid + 1, 98, "src/api/b.py", "Use the logger instead of print()", reply_to=100))
     return out
-
 
 class TempHome(unittest.TestCase):
     """A throw-away LORE_HOME plus a scratch folder, active in this process and in subprocesses."""
@@ -128,7 +124,6 @@ class TempHome(unittest.TestCase):
             self.addCleanup(os.environ.pop if old is None else os.environ.__setitem__, key, *([] if old is None else [old]))
         self.env = {**os.environ}
         return log
-
 
 class RegisteredProject(TempHome):
     """TempHome plus a registered project "app" with one pending and one active rule."""

@@ -1,7 +1,7 @@
 """Learn from code review: turn recurring pull-request comments into pending rule proposals.
 
     comments = fetch_review_comments(project.root)       # needs `gh`; or build ReviewComment objects yourself
-    proposals = propose(comments, min_repeats=3)
+    proposals = propose(comments, min_repeats=2)
 
 Depends on `core` only. Nothing here stores anything: the caller saves proposals as pending rules.
 """

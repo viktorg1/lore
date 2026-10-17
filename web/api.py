@@ -12,6 +12,7 @@ from core.models import Rule, Scope, Status
 from core.projects import Project
 from core.repository import RuleRepository
 from core.usage import Usage, UsageLog
+from reviews import trust
 from reviews.github import REPO_RE, parse_pr_numbers
 
 from .runner import Runner
@@ -19,20 +20,17 @@ from .validation import ApiError, number_field, text_field
 
 MAX_RESOLVE_PATHS = 20
 
-
 def rule_view(r: Rule, usage: Usage = Usage()) -> dict:
     hidden = r.hidden
-    return {"id": r.id, "text": sanitize.reveal(r.text) if hidden else r.text, "hidden": hidden, "risks": r.risks, "scope": r.scope.key, "status": r.status.value,
+    return {"id": r.id, "text": sanitize.reveal(r.text) if hidden else r.text, "hidden": hidden, "risks": r.risks, "always": r.always, "title": r.title, "triggers": list(r.triggers), "tagged": r.tagged, "auto": r.auto, "scope": r.scope.key, "status": r.status.value,
             "source": r.source, "evidence": r.evidence, "created": r.created, "refs": list(r.refs),
             "served": usage.served, "last_served": usage.last_served}
-
 
 def parse_scope(spec: str) -> Scope:
     try:
         return Scope.parse(spec)
     except ValueError as e:
         raise ApiError(400, str(e))
-
 
 class Api:
     def __init__(self, runner: Runner | None = None):
@@ -62,7 +60,9 @@ class Api:
     def project_rules(self, name: str) -> dict:
         project = self._project(name)
         usage = UsageLog(name).all()
+        known = trust.stored(project)          # what was last decided; the page never triggers a check with GitHub
         return {"name": name, "root": str(project.root), "sections": sorted(project.load_map()["sections"]),
+                "trust": {"trusted": known.trusted, "reason": known.reason} if known else None,
                 "rules": [rule_view(r, usage.get(r.id, Usage())) for r in RuleRepository(name).all()]}
 
     # ----- rules -----
@@ -97,6 +97,8 @@ class Api:
                     repo.set_status([rule_id], Status.ACTIVE)
                 except ValueError as e:
                     raise ApiError(400, str(e))
+            elif action in ("pin", "unpin"):
+                repo.set_always([rule_id], action == "pin")
             elif action == "unapprove":
                 repo.set_status([rule_id], Status.PENDING)
             elif action == "remove":
@@ -165,7 +167,7 @@ class Api:
         mode = p.get("mode", "preview")
         if mode not in ("preview", "save"):
             raise ApiError(400, "mode must be preview or save")
-        argv = ["learn.py", "--name", project.name, f"--min-repeats={number_field(p, 'minRepeats', 3, int, 2, 100)}"]
+        argv = ["learn.py", "--name", project.name, f"--min-repeats={number_field(p, 'minRepeats', 1, int, 1, 100)}"]
         try:
             prs = parse_pr_numbers(text_field(p, "prs", required=False, maxlen=300))
         except ValueError as e:

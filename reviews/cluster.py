@@ -1,7 +1,7 @@
 """Group review comments that ask for the same thing, and turn recurring groups into rule proposals.
 
 Deterministic and offline: words in common, not a language model. A group only becomes a proposal if
-reviewers said it several times, on several pull requests, so one-off remarks are ignored.
+reviewers said it enough times (`min_repeats`, default 1: every actionable comment is a candidate).
 """
 from __future__ import annotations
 
@@ -25,13 +25,20 @@ class _Item:
     words: frozenset[str]
 
 
-def usable(comments: list[ReviewComment], *, include_bots: bool = False, reviewers: set[str] | None = None) -> list[_Item]:
-    """Comments that carry a reviewer's own, actionable remark, in a stable order."""
+def usable(comments: list[ReviewComment], *, include_bots: bool = False, reviewers: set[str] | None = None,
+           include_external: bool = False) -> list[_Item]:
+    """Comments that carry a reviewer's own, actionable remark, in a stable order.
+
+    Comments by people outside the repository's team (anyone can comment on a public repository) are left out unless
+    `include_external`: they must not be able to write rules.
+    """
     items = []
     for c in sorted(comments, key=lambda c: (c.created, c.id)):
         if c.is_reply or (c.is_bot and not include_bots) or sanitize.hidden_count(c.body):
             continue          # a comment hiding characters is never evidence for a rule
         if reviewers and c.author.lower() not in reviewers:
+            continue
+        if not c.is_team and not include_external:
             continue
         cleaned = text.clean(c.body)
         if text.is_actionable(cleaned):
@@ -79,22 +86,30 @@ def scope_for(comments: list[ReviewComment]) -> Scope:
         return Scope.everywhere()
     sections = {section_of(p) for p in paths}
     if len(sections) == 1 and "root" not in sections:
-        return Scope.for_section(sections.pop())
+        try:
+            return Scope.for_section(sections.pop())
+        except ValueError:      # a file path with line breaks, quotes or hidden characters is not a usable section name
+            return Scope.everywhere()
     exts = {_extension(p) for p in paths}
     if len(exts) == 1 and None not in exts:
-        return Scope.for_globs(f"**/*.{exts.pop()}")
+        try:
+            return Scope.for_globs(f"**/*.{exts.pop()}")
+        except ValueError:
+            return Scope.everywhere()
     return Scope.everywhere()
 
 
-def propose(comments: list[ReviewComment], *, min_repeats: int = 3, min_prs: int = 2,
+def propose(comments: list[ReviewComment], *, min_repeats: int = 1, min_prs: int = 1,
             seen: frozenset[str] | set[str] = frozenset(), include_bots: bool = False,
-            reviewers: set[str] | None = None, threshold: float = SIMILARITY) -> list[Proposal]:
+            reviewers: set[str] | None = None, include_external: bool = False,
+            threshold: float = SIMILARITY) -> list[Proposal]:
     """Recurring review themes as proposals, most repeated first.
 
     `seen` holds comment URLs already proposed before; a theme that is mostly made of them is skipped.
     """
     out = []
-    for members in group(usable(comments, include_bots=include_bots, reviewers=reviewers), threshold):
+    for members in group(usable(comments, include_bots=include_bots, reviewers=reviewers,
+                                include_external=include_external), threshold):
         cs = [m.comment for m in members]
         prs = sorted({c.pr for c in cs if c.pr is not None})
         if len(members) < min_repeats or len(prs) < min_prs:

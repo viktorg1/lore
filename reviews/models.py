@@ -5,7 +5,6 @@ from dataclasses import dataclass, field
 
 from core.models import Scope
 
-
 @dataclass(frozen=True)
 class ReviewComment:
     id: int
@@ -17,7 +16,12 @@ class ReviewComment:
     is_bot: bool = False
     is_reply: bool = False   # part of a thread, not the reviewer's original remark
     created: str = ""
+    association: str = ""    # GitHub's relationship of the author to the repository: OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, NONE...
 
+    @property
+    def is_team(self) -> bool:
+        """Written by someone with a role in the repository, not by an outside contributor (anyone can comment on a public repo)."""
+        return self.association in TEAM_ASSOCIATIONS
 
 @dataclass
 class Proposal:
@@ -35,5 +39,5 @@ class Proposal:
     def prs(self) -> list[int]:
         return sorted({c.pr for c in self.comments if c.pr is not None})
 
-
 MAX_REFS = 10
+TEAM_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})

@@ -158,7 +158,7 @@ if (location.search) history.replaceState(null, "", location.pathname);   // kee
 const group = (v) => ({ v, out: null, running: false });
 const freshTools = () => ({
   discover: group({ minRatio: "0.9", minFiles: "5" }),
-  learn: group({ prs: "", since: "90", minRepeats: "3", repo: "" }),
+  learn: group({ prs: "", since: "90", minRepeats: "1", repo: "" }),
   train: group({ path: "", scope: "", pending: false, dryRun: false }),
   resolve: group({ paths: "" }),
   project: group({}),
@@ -268,7 +268,10 @@ function renderMain() {
   if (!d) return renderEmpty();
   const all = d.rules, active = all.filter((r) => r.status === "active"), pending = all.filter((r) => r.status === "pending");
 
-  $("head").replaceChildren(h("h1", {}, d.name), h("div", { class: "root" }, d.root));
+  const trust = d.trust ? h("span", { class: "chip" + (d.trust.trusted ? "" : " bad"),
+    title: (d.trust.trusted ? "Rules the agent saves here can be activated without you: " : "Rules the agent saves here wait for you: ") + d.trust.reason + ". Change it with review.py trust / untrust." },
+    d.trust.trusted ? "your repository" : "not your repository") : null;
+  $("head").replaceChildren(h("h1", {}, d.name, " ", trust), h("div", { class: "root" }, d.root));
   const tabs = [["pending", "Pending", String(pending.length)], ["active", "Approved", String(active.length)], ["tools", "Tools", ""]];
   $("tabs").replaceChildren(...tabs.map(([key, label, n]) =>
     h("button", { class: "tab", role: "tab", "aria-selected": String(state.tab === key),
@@ -324,6 +327,8 @@ function card(r) {
                    : guard(async () => { await act(r, { action: "approve" }); await refresh(); }) },
     risky ? (state.sure === apKey ? "Approve anyway?" : "Review & approve") : "Approve"));
   actions.push(h("button", { class: "btn", onclick: () => { state.editing = r.id; state.adding = false; state.sure = null; renderMain(); } }, "Edit"));
+  if (r.status === "active") actions.push(h("button", { class: "btn", title: r.always ? "Stop sending it with every request" : "Send it with every request, whatever the agent is working on",
+    onclick: guard(async () => { await act(r, { action: r.always ? "unpin" : "pin" }); await refresh(); }) }, r.always ? "Unpin" : "Pin"));
   if (r.status === "active") actions.push(h("button", { class: "btn", onclick: guard(async () => { await act(r, { action: "unapprove" }); await refresh(); }) }, "Unapprove"));
   actions.push(h("button", { class: "btn danger" + (state.sure === key ? " sure" : ""),
     onclick: twoStep(key, async () => { await act(r, { action: "remove" }); await refresh(); }) },
@@ -334,6 +339,9 @@ function card(r) {
       h("div", { class: "text" }, r.text),
       h("div", { class: "meta" },
         h("span", { class: "chip scope" }, r.scope),
+        r.always ? h("span", { class: "chip", title: "Sent to the agent with every request, whatever it is working on." + (r.tagged.startsWith("agent") ? " Chosen by the agent; use Unpin to change it." : "") }, "📌 always sent") : null,
+        r.auto ? h("span", { class: "chip bad", title: `Lore activated this rule by itself on ${r.auto.slice(0, 10)}; nobody approved it. Delete it to undo, or Unapprove to hold it back.` }, "auto-activated") : null,
+        r.tagged ? h("span", { class: "chip", title: `${r.title || "(no title)"}\nWhen it matters: ${r.triggers.join(", ") || "-"}\nTagged: ${r.tagged}` }, "🏷 " + (r.title || "tagged")) : null,
         r.hidden ? h("span", { class: "chip bad", title: "Hidden characters are shown as <U+XXXX>. This rule is never served to an agent or exported until you fix it." },
           `⚠ ${r.hidden} hidden character${r.hidden === 1 ? "" : "s"}`) : null,
         risky ? h("span", { class: "chip bad", title: "This text looks like an instruction aimed at the agent rather than a coding convention. Read it carefully before approving." },
@@ -445,7 +453,7 @@ function renderTools() {
 
   const learn = h("section", { class: "tool" },
     h("h3", {}, "Learn from PR reviews"),
-    h("p", {}, "Finds feedback reviewers repeat across pull requests and proposes it as pending rules, linked to the comments (learn.py). Name the pull requests to read, or leave that blank to read the recent ones. Needs the GitHub CLI (gh) installed and logged in on this machine; the wording is the reviewers', so edit it before approving."),
+    h("p", {}, "Turns actionable review comments into pending rule drafts, linked to the comments (learn.py). One comment is enough; raise the minimum to see only repeated feedback. For judgement about which are real conventions, ask your agent to “learn from PR N”. Name the pull requests to read, or leave that blank to read the recent ones. Needs the GitHub CLI (gh) installed and logged in on this machine; the wording is the reviewers', so edit it before approving."),
     h("div", { class: "fields" },
       field("Pull requests (blank = recent)", textInput(T.learn, "prs", { placeholder: "e.g. 12, 15-18", label: "Pull request numbers" })),
       field("Days back (when no PRs are named)", textInput(T.learn, "since", { type: "number", mono: false, label: "Days back" })),

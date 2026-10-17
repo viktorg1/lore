@@ -21,10 +21,8 @@ _BLANK_LOOKALIKES = {"ㅤ", "ﾠ", "⠀", "ᅟ", "ᅠ", "឴", "឵", "͏", "؜"
 _SCOPE_FORBIDDEN = re.compile(r'[\x00-\x1f\x7f"\\`]')
 _URL = re.compile(r"^https?://[^\s<>\"'`\\]+$", re.I)
 
-
 class RuleTextError(ValueError):
     """The text may not become a rule; the message says why and is fit to show to a person."""
-
 
 def is_hidden(ch: str) -> bool:
     """True for characters a reader cannot see but a model receives."""
@@ -39,28 +37,28 @@ def is_hidden(ch: str) -> bool:
         return True                                                # variation selectors can smuggle data
     return False
 
-
 def hidden_chars(text: str) -> list[str]:
     return [ch for ch in text if is_hidden(ch)]
 
-
 def hidden_count(text: str) -> int:
     return len(hidden_chars(text))
-
 
 def reveal(text: str) -> str:
     """The text with every hidden character spelled out, e.g. `<U+200B>`, so a person can see it."""
     return "".join(f"<U+{ord(ch):04X}>" if is_hidden(ch) else ch for ch in text)
 
+def label(text: str, maxlen: int = 60) -> str:
+    """Untrusted text (a folder or file name) made safe to show to an agent: line breaks and hidden characters spelled
+    out as <U+XXXX>, and shortened to `maxlen` characters."""
+    shown = reveal("".join(f"<U+{ord(c):04X}>" if c in "\t\n\r" else c for c in text))
+    return shown if len(shown) <= maxlen else shown[:maxlen - 1] + "…"
 
 def strip_hidden(text: str) -> str:
     return "".join(ch for ch in text if not is_hidden(ch))
 
-
 def _describe(chars: list[str]) -> str:
     first = chars[0]
     return f"U+{ord(first):04X} {unicodedata.name(first, 'unassigned character')}"
-
 
 def clean_rule_text(text: str) -> str:
     """The text as it will be stored: one line, visible characters only, within the length limit.
@@ -79,16 +77,33 @@ def clean_rule_text(text: str) -> str:
         raise RuleTextError(f"is {len(text)} characters long; keep a rule under {MAX_RULE_LENGTH}")
     return text
 
-
 def clean_note(text: str, maxlen: int = MAX_NOTE_LENGTH) -> str:
     """Evidence and labels are shown to people, not followed: hidden characters are dropped, size is capped."""
     text = " ".join(strip_hidden(text or "").split())
     return text if len(text) <= maxlen else text[: maxlen - 1].rstrip() + "…"
 
+MAX_TITLE = 60
+MAX_TRIGGERS = 12
+MAX_TRIGGER = 40
+
+def clean_tag_text(value, what: str, maxlen: int) -> str:
+    """A rule's title or trigger word: one short line of visible text. Refused, not repaired, like rule text."""
+    if not isinstance(value, str):
+        raise RuleTextError(f"{what} must be text")
+    value = " ".join(value.split())
+    hidden = hidden_chars(value)
+    if hidden:
+        raise RuleTextError(f"{what} contains {len(hidden)} hidden character(s); remove them")
+    if "<!--" in value or "-->" in value:
+        raise RuleTextError(f"{what} contains an HTML comment marker")
+    if not value:
+        raise RuleTextError(f"{what} is empty")
+    if len(value) > maxlen:
+        raise RuleTextError(f"{what} is {len(value)} characters long; keep it under {maxlen}")
+    return value
 
 def is_http_url(value: str) -> bool:
     return bool(_URL.match(value)) and not hidden_chars(value) and len(value) <= 2000
-
 
 def clean_scope_token(value: str, what: str) -> str:
     """A section name or glob: printable, no quotes/backslashes/backticks/newlines, bounded."""

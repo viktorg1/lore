@@ -141,14 +141,26 @@ class Rule:
     hits: int = 0
     edited: str | None = None
     refs: list[str] = field(default_factory=list)     # links to what justifies the rule (e.g. PR review comments)
+    always: bool = False                              # must be followed on essentially every edit in its scope: sent with every get_rules call
+    title: str = ""                                   # 3-6 words naming the rule, shown in the index of rules not sent
+    triggers: list[str] = field(default_factory=list)  # words a task contains when the rule matters (incl. synonyms)
+    auto: str = ""                                    # when Lore activated it by itself (no person approved it), else empty
+    tagged: str = ""                                  # who wrote title/triggers/always and when, e.g. "agent 2026-10-17T10:00:00"
     extra: dict = field(default_factory=dict)         # unknown keys from the file survive a load/save round-trip
 
-    _KNOWN = ("id", "text", "scope", "status", "source", "evidence", "created", "hits", "edited", "refs")
+    _KNOWN = ("id", "text", "scope", "status", "source", "evidence", "created", "hits", "edited", "refs", "always", "title", "triggers", "tagged", "auto")
 
     @property
     def risks(self) -> list[str]:
         """Why this text looks like an attack on the agent rather than a convention (see core/risk.py)."""
         return risk.check(self.text)
+
+    @property
+    def index_title(self) -> str:
+        """What names the rule in a list: its title, else the start of its text."""
+        if self.title:
+            return self.title
+        return self.text if len(self.text) <= 60 else self.text[:59].rstrip() + "…"
 
     @property
     def hidden(self) -> int:
@@ -164,7 +176,8 @@ class Rule:
         return cls(
             id=d["id"], text=d["text"], scope=Scope.from_dict(d["scope"]), status=Status(d["status"]),
             source=d.get("source", ""), evidence=d.get("evidence", ""), created=d.get("created", ""),
-            hits=d.get("hits", 0), edited=d.get("edited"), refs=list(d.get("refs") or []),
+            hits=d.get("hits", 0), edited=d.get("edited"), refs=list(d.get("refs") or []), always=bool(d.get("always")), title=str(d.get("title") or ""),
+            triggers=[str(t) for t in (d.get("triggers") or [])], tagged=str(d.get("tagged") or ""), auto=str(d.get("auto") or ""),
             extra={k: v for k, v in d.items() if k not in cls._KNOWN},
         )
 
@@ -175,4 +188,14 @@ class Rule:
             d["edited"] = self.edited
         if self.refs:
             d["refs"] = list(self.refs)
+        if self.always:
+            d["always"] = True
+        if self.title:
+            d["title"] = self.title
+        if self.triggers:
+            d["triggers"] = list(self.triggers)
+        if self.tagged:
+            d["tagged"] = self.tagged
+        if self.auto:
+            d["auto"] = self.auto
         return {**d, **self.extra}

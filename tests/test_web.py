@@ -17,7 +17,6 @@ from web.validation import ApiError, number_field, text_field
 
 TOKEN = "test-token"
 
-
 class TestValidation(unittest.TestCase):
     def test_text_field(self):
         self.assertEqual(text_field({"a": "  x "}, "a"), "x")
@@ -32,7 +31,6 @@ class TestValidation(unittest.TestCase):
         for body in ({"n": "abc"}, {"n": 99}, {"n": None}):
             with self.assertRaises(ApiError):
                 number_field(body, "n", 5, int, 1, 10)
-
 
 class TestApi(RegisteredProject):
     def setUp(self):
@@ -51,7 +49,7 @@ class TestApi(RegisteredProject):
         self.assertEqual({r["status"] for r in data["rules"]}, {"active", "pending"})
         self.assertEqual(data["rules"][0]["evidence"], "12/12 files")
         self.assertEqual(set(data["rules"][0]), {"id", "text", "scope", "status", "source", "evidence", "created", "refs",
-                                                  "served", "last_served", "hidden", "risks"})
+                                                  "served", "last_served", "hidden", "risks", "always", "title", "triggers", "tagged", "auto"})
         self.assertEqual(data["rules"][0]["refs"], [])
 
     def test_views_carry_usage(self):
@@ -97,7 +95,6 @@ class TestApi(RegisteredProject):
                      {"text": "ok", "status": ["active"]}, {"text": 5}, {"text": "x" * 2001}):
             self.assertEqual(self.status_of(lambda: self.api.add_rule("app", body)), 400, body)
         self.assertEqual(self.status_of(lambda: self.api.add_rule("ghost", {"text": "ok"})), 404)
-
 
 class TestScripts(RegisteredProject):
     """The Tools tab: every script runs for real, as a subprocess."""
@@ -172,9 +169,10 @@ class TestScripts(RegisteredProject):
 
     def test_learn_from_reviews(self):
         self.use_fake_gh()
-        preview = self.tool("learn", mode="preview")
+        preview = self.tool("learn", mode="preview", minRepeats=3)
         self.assertTrue(preview["ok"], preview["output"])
         self.assertEqual(preview["output"].count("similar review comments on"), 3)
+        self.assertGreater(self.tool("learn", mode="preview")["output"].count("similar review comments on"), 3)   # default: every comment
         before = len(self.repo.all())
         saved = self.tool("learn", mode="save", since=60, minRepeats=3, repo="acme/shop")
         self.assertTrue(saved["ok"], saved["output"])
@@ -182,7 +180,7 @@ class TestScripts(RegisteredProject):
         self.assertEqual((len(self.repo.all()) - before, {r.status for r in new}), (3, {Status.PENDING}))
         view = self.api.project_rules("app")["rules"]
         self.assertTrue(all(r["refs"] for r in view if r["source"] == "review"))
-        failing = self.tool("learn", mode="preview")                  # already proposed: nothing new, still a clean run
+        failing = self.tool("learn", mode="preview", minRepeats=3)                  # already proposed: nothing new, still a clean run
         self.assertIn("No new recurring themes", failing["output"])
 
     def test_learn_reads_the_named_pull_requests_only(self):
@@ -209,7 +207,7 @@ class TestScripts(RegisteredProject):
         self.bad("learn", since=0)
         self.bad("learn", prs="12x")
         self.bad("learn", prs="1-99")
-        self.bad("learn", minRepeats=1)
+        self.bad("learn", minRepeats=0)
         self.bad("train")                                    # path required
         self.bad("train", path="x", scope="bogus")
         self.bad("discover", mode="explode")
@@ -248,7 +246,6 @@ class TestScripts(RegisteredProject):
         self.assertEqual((failed["ok"], failed["code"]), (False, 3))
         self.assertIn("out", failed["output"])
         self.assertIn("err", failed["output"])
-
 
 class TestHttp(RegisteredProject):
     def setUp(self):
@@ -324,6 +321,13 @@ class TestHttp(RegisteredProject):
         status, body, _ = self.call("POST", path, {"action": "approve", "confirm_risky": True})
         self.assertEqual((status, json.loads(body)["status"]), (200, "active"))
 
+    def test_pin_and_unpin_over_http(self):
+        path = f"/api/projects/app/rules/{self.active.id}"
+        status, body, _ = self.call("POST", path, {"action": "pin"})
+        self.assertEqual((status, json.loads(body)["always"]), (200, True))
+        self.assertTrue(self.repo.get(self.active.id).always)
+        self.assertFalse(json.loads(self.call("POST", path, {"action": "unpin"})[1])["always"])
+
     def test_post_flow_and_validation(self):
         rid = self.pending.id
         path = f"/api/projects/app/rules/{rid}"
@@ -357,7 +361,6 @@ class TestHttp(RegisteredProject):
 
     def test_binds_to_loopback_only(self):
         self.assertEqual(self.srv.server_address[0], "127.0.0.1")
-
 
 if __name__ == "__main__":
     unittest.main()

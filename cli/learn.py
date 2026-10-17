@@ -17,7 +17,6 @@ from reviews import GhError, LearnOptions, learn, parse_pr_numbers
 
 from .common import CliError, entry, load_project, make_parser
 
-
 @entry
 def main(argv=None) -> int:
     ap = make_parser(__doc__)
@@ -26,13 +25,15 @@ def main(argv=None) -> int:
     ap.add_argument("--pr", action="append", default=[], metavar="N",
                     help="read only these pull requests (12, 12,15 or 15-18; repeatable). Ignores --since")
     ap.add_argument("--since", type=int, default=90, help="without --pr: only comments from the last N days (default 90)")
-    ap.add_argument("--min-repeats", type=int, default=3, help="similar comments needed for a proposal (default 3)")
+    ap.add_argument("--min-repeats", type=int, default=1, help="similar comments needed for a proposal (default 1: every actionable comment)")
     ap.add_argument("--min-prs", type=int, default=None,
-                    help="distinct pull requests they must span (default 2, or 1 when you name a single PR)")
+                    help="distinct pull requests they must span (default 1)")
     ap.add_argument("--limit", type=int, default=300, help="most comments to read (default 300)")
     ap.add_argument("--repo", help="OWNER/NAME (default: the repository of the project's git checkout)")
     ap.add_argument("--reviewer", action="append", default=[], metavar="LOGIN", help="only comments by this reviewer (repeatable)")
     ap.add_argument("--include-bots", action="store_true", help="also use comments written by bots")
+    ap.add_argument("--include-external", action="store_true",
+                    help="also use comments by people outside the repository's team (default: owners, members, collaborators)")
     ap.add_argument("--include-seen", action="store_true", help="propose comments that were proposed before too")
     args = ap.parse_args(argv)
 
@@ -42,7 +43,8 @@ def main(argv=None) -> int:
     try:
         options = LearnOptions(prs=parse_pr_numbers(*args.pr), since_days=args.since, min_repeats=args.min_repeats,
                                min_prs=args.min_prs, limit=args.limit, repo=args.repo, reviewers=args.reviewer,
-                               include_bots=args.include_bots, include_seen=args.include_seen, save=args.save)
+                               include_bots=args.include_bots, include_seen=args.include_seen,
+                               include_external=args.include_external, save=args.save)
         result = learn(project, options)
     except (ValueError, GhError) as e:
         raise CliError(str(e))

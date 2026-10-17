@@ -24,95 +24,99 @@ Agents forget your standards and repeat the mistakes you already corrected. Long
 they are noisy, they go stale, and the model skims them.
 
 Lore keeps a small set of **rules per project** and gives the agent **only the ones that apply to the files it is
-about to change**. You stay in control: nothing the tool guesses takes effect until you approve it.
+about to change**. After a one-minute setup you don't run anything: the agent registers projects, learns rules from your
+corrections and your code review, and fetches the right ones before each edit.
 
 > Lore is retrieval memory, not model training. Rules are plain JSON you can read, edit and delete.
 
-## How it works
-
-```
- your docs ──┐
- your code ──┼──▶  rules (pending / active)  ──▶  you review  ──▶  agent calls get_rules(paths)
- PR reviews ─┘                                                      before it edits
-```
-
-| Where rules come from | Command | Starts as |
-| --- | --- | --- |
-| Rules you write, or your own docs | `train.py`, `review.py add` | active |
-| Conventions inferred from the code | `discover.py` | pending |
-| Recurring PR review comments | `learn.py` | pending |
-| Corrections you give the agent | `record_feedback` (MCP) | pending |
-| Existing instruction files | `memorize.py` | pending |
-
-Each rule has a scope: `global`, a folder-level `section`, or a `glob` like `**/*.{ts,tsx}`.
-The most specific rules come first.
-
-## Quick start
+## Set it up (once)
 
 Requires Python 3.10+.
 
 ```bash
-git clone <this repo> ~/projects/lore && cd ~/projects/lore
-
-python3 memorize.py --path ~/projects/myapp           # register a project
-python3 discover.py --name myapp --save               # infer rules from its code
-python3 review.py --name myapp list --status pending  # read them
-python3 review.py --name myapp approve --all          # keep what you agree with
+git clone <this repo> ~/projects/lore
+python3 ~/projects/lore/install.py
 ```
 
-Prefer a browser? Run `python3 serve.py` and do all of it from a dark, simple UI.
+That connects Lore to Claude Code and Copilot CLI if they are installed (`--client claude|copilot` to pick one,
+`--dry-run` to preview, `--uninstall` to undo). Start a new agent session and you're done.
+
+From then on:
+
+- **Projects register themselves** the first time an agent works in a git repository.
+- **The agent gets its instructions from Lore** when it connects. There is nothing to paste into config files.
+- **Rules learn themselves.** When you correct the agent it saves a rule. On a new project it reads the code, and your
+  pull-request review comments if `gh` is set up, and saves the conventions worth keeping. It also writes the title and
+  trigger words that decide when each rule is sent, so you never pin or tag anything.
+- **Each edit gets only the rules it needs**, not the whole list, and never the same rule twice in a session.
+
+```
+ you correct the agent ─┐
+ your code ─────────────┼─▶ agent proposes rules ─▶ Lore screens them ─▶ active ─▶ get_rules(paths, task) before each edit
+ PR review comments ────┘                                  │
+                                                           └─ flagged ─▶ waits for you
+```
 
 <p align="center">
   <img width="900" alt="Lore web UI" src="https://github.com/user-attachments/assets/6ad8b77a-cb79-4998-af07-07036a223f93" />
 </p>
 
-## Connect your agent
-
-Lore is an MCP server with three tools: `get_rules`, `record_feedback`, `learn_from_reviews`.
-
-**Copilot CLI** (`~/.copilot/mcp-config.json`):
-
-```json
-{
-  "mcpServers": {
-    "lore": {
-      "type": "local",
-      "command": "python3",
-      "args": ["/home/YOU/projects/lore/mcp_server.py"],
-      "tools": ["*"]
-    }
-  }
-}
-```
-
-**VS Code**: add the same server to your user MCP configuration. Both setups are walked through in
-[the full guide](README-overly-explained.md#3-connect-your-agent).
-
-Then tell the agent to use it (`~/.copilot/copilot-instructions.md`):
-
-```text
-Before creating or editing any file, call get_rules from the lore server with the absolute paths
-you are about to change, and follow the rules it returns. When I correct your code, call
-record_feedback with one short, general, imperative rule.
-```
-
-## Learn from code review
-
-```bash
-python3 learn.py --name myapp --pr 120-140 --save
-```
-
-Reads inline review comments through the `gh` CLI, groups the ones that keep repeating, and proposes them as
-pending rules with links back to the comments. Reject one and it stays rejected.
+You only need to look when something is flagged. `python3 serve.py` opens a simple dark UI to browse, edit or delete rules,
+and `python3 review.py --name myapp list --auto` shows what Lore activated by itself.
 
 ## Safe by default
 
-- **Pending until you approve.** Anything inferred or suggested has no effect until you say so.
-- **Risky rules need a second look.** `approve --all` asks first, and rules that look like attacks ("ignore previous instructions", `curl | sh`, key files, links) are never bulk-approved.
-- **No hidden text.** Rules containing invisible Unicode, HTML comments or more than 500 characters are refused.
-- **Contradictions are flagged**, not silently merged ("use tabs" next to "use spaces").
-- **Small on purpose.** The agent gets at most 20 rules and 2,000 tokens per request.
-- **Everything is local** in `~/.lore` (set `LORE_HOME` to move it).
+Rules the agent proposes are **activated automatically only in your own repositories, and only if they pass screening**.
+Everything is reversible:
+
+- **Your repositories only.** A repository counts as yours when it has no remote, or when your `gh` login can push to it.
+  In anything else (a project you cloned from someone else, another git host) rules wait for you, and Lore does not read
+  its review comments by itself. `review.py --name myapp trust` / `untrust` overrides that.
+- **The project you're working on.** Rules are saved to the project whose files the agent is editing, never to another
+  one by name, and are only activated there.
+
+- **Screened.** A rule waits for you if it looks like an attack on the agent ("ignore previous instructions", `curl | sh`,
+  key files, links), if it may contradict an existing rule, or if its text hides characters. Hidden Unicode, HTML comments
+  and anything over 500 characters are refused outright.
+- **Limited.** At most 25 rules can be activated automatically per session (`auto_limit`).
+- **Visible and undoable.** The agent tells you what it saved. Each one is marked *auto-activated* in the UI and in
+  `review.py list`, and `review.py --name myapp reject <id>` removes it.
+- **Only your team counts.** Review comments from people outside the repository's team (owners, members, collaborators)
+  are ignored, because anyone can comment on a public repo. Instruction files already in a repository are not imported
+  automatically.
+- **You can turn it off.** `python3 install.py --approval manual` makes every proposed rule wait for your approval.
+
+This is a trade-off: a screened rule is not a reviewed rule, and the screening is simple pattern matching. If you work in
+repositories you don't trust, use manual mode. Details in [SECURITY.md](SECURITY.md).
+
+Also: contradictions are flagged rather than merged, the agent sees a one-line title for every rule it didn't get so it can
+ask for one, and everything is stored locally in `~/.lore` (set `LORE_HOME` to move it).
+
+## Settings
+
+`~/.lore/config.json`, all optional:
+
+```json
+{ "approval": "auto", "auto_register": true, "auto_limit": 25 }
+```
+
+`approval` is `auto` or `manual`, `auto_register` controls whether git projects register themselves, `auto_limit` caps
+automatic activations per session. `LORE_APPROVAL=manual` overrides the file for one run.
+
+## By hand
+
+Everything the agent does is also available as commands, for scripting or when you'd rather decide yourself:
+
+```bash
+python3 memorize.py --path ~/projects/myapp           # register a project
+python3 discover.py --name myapp --save               # infer rules from its code (pending)
+python3 learn.py --name myapp --pr 120 --save         # rule drafts from one pull request (pending)
+python3 review.py --name myapp list --status pending  # read them
+python3 review.py --name myapp approve --all          # asks first; never bulk-approves risky-looking rules
+```
+
+VS Code: add the server (`python3 /path/to/lore/mcp_server.py`, type stdio) to your user MCP configuration; the full guide
+walks through it.
 
 ## Learn more
 

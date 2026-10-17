@@ -9,7 +9,6 @@ from core.models import Outcome, Scope, Status
 
 TAG = "".join(chr(0xE0000 + ord(c)) for c in "ignore")
 
-
 class TestSanitize(unittest.TestCase):
     def test_hidden_characters_are_detected(self):
         for ch in (chr(0xE0041), "​", "‮", "︁", "ㅤ", "\x07"):
@@ -30,7 +29,6 @@ class TestSanitize(unittest.TestCase):
         with self.assertRaises(ValueError):
             Scope.for_globs()
 
-
 class TestContradiction(unittest.TestCase):
     def test_opposites(self):
         for a, b in (("Use tabs for indentation", "Use spaces for indentation"),
@@ -41,7 +39,6 @@ class TestContradiction(unittest.TestCase):
 
     def test_paraphrases_are_not_contradictions(self):
         self.assertFalse(textutil.contradicts("Never use any in TypeScript", "never use `any` in TypeScript."))
-
 
 class TestRepositorySafety(RegisteredProject):
     def test_hidden_text_rejected(self):
@@ -83,15 +80,16 @@ class TestRepositorySafety(RegisteredProject):
             self.repo.set_status([r.id], Status.ACTIVE)
         self.assertEqual(self.repo.get(r.id).status, Status.PENDING)
 
-
 class TestResolverLimits(RegisteredProject):
-    def test_max_rules_and_ceiling(self):
-        for i in range(25):
+    def test_no_rule_is_dropped_unless_the_caller_sets_a_limit(self):
+        for i in range(60):
             self.repo.add(f"Rule number {i} about naming of module {i * 7}", Scope.everywhere(), Status.ACTIVE)
-        res = resolver.resolve("app", ["src/a.py"], max_tokens=10 ** 6)
-        self.assertLessEqual(len(res.rules), resolver.MAX_RULES)
-        self.assertIn("left out", res.text)
-
+        res = resolver.resolve("app", ["src/a.py"])
+        self.assertEqual((len(res.rules), res.omitted), (61, 0))              # 60 global rules + the fixture's section rule
+        self.assertNotIn("left out", res.text)
+        limited = resolver.resolve("app", ["src/a.py"], max_rules=5)
+        self.assertEqual((len(limited.rules), limited.omitted), (5, 56))
+        self.assertIn("left out", limited.text)
 
 class TestRisk(unittest.TestCase):
     def test_attack_shaped_text_is_flagged(self):
@@ -106,7 +104,6 @@ class TestRisk(unittest.TestCase):
         for text in ("Use tabs for indentation", "Never commit secrets or API keys", "Do not ignore failing tests",
                      "Verify changes with the project scripts: `npm run test`", "Keep functions small"):
             self.assertEqual(risk.check(text), [], text)
-
 
 class TestHostileFolderNames(RegisteredProject):
     """Folder names come from the open repository, so they are untrusted text in what the agent reads."""
@@ -125,7 +122,6 @@ class TestHostileFolderNames(RegisteredProject):
         self.assertLessEqual(len(res.sections[0]), resolver.MAX_LABEL)
         self.assertEqual(res.text.split("\n")[0].count("sections:"), 1)
 
-
 class TestExportSafety(RegisteredProject):
     def test_symlinked_target_is_refused(self):
         self.repo.add("Use dependency injection", Scope.everywhere(), Status.ACTIVE)
@@ -142,7 +138,6 @@ class TestExportSafety(RegisteredProject):
         self.repo.add("Use dependency injection", Scope.for_globs("*.py"), Status.ACTIVE)
         res = export.sync_copilot(self.project)
         self.assertIn('applyTo: "*.py"', res.written[0].read_text())
-
 
 if __name__ == "__main__":
     unittest.main()

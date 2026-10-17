@@ -16,8 +16,7 @@ import support
 PACKAGES = {"core": set(), "discovery": {"core"}, "reviews": {"core"},
             "cli": {"core", "discovery", "reviews"}, "web": {"core", "discovery", "reviews"},
             "mcpserver": {"core", "discovery", "reviews"}}
-ROOT_SCRIPTS = {"memorize.py", "train.py", "discover.py", "learn.py", "review.py", "serve.py", "mcp_server.py"}
-
+ROOT_SCRIPTS = {"install.py", "memorize.py", "train.py", "discover.py", "learn.py", "review.py", "serve.py", "mcp_server.py"}
 
 def imported_packages(path: Path) -> set[str]:
     out = set()
@@ -27,7 +26,6 @@ def imported_packages(path: Path) -> set[str]:
         elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
             out.add(node.module.split(".")[0])
     return out
-
 
 class TestLayering(unittest.TestCase):
     def test_packages_only_import_downwards(self):
@@ -50,7 +48,6 @@ class TestLayering(unittest.TestCase):
     def test_every_package_is_a_package(self):
         for package in PACKAGES:
             self.assertTrue((support.ROOT / package / "__init__.py").exists(), package)
-
 
 if __name__ == "__main__":
     unittest.main()
